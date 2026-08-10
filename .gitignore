@@ -11,6 +11,9 @@
 *.key
 secrets/
 
+# Local object storage — uploaded books live here in development.
+var/
+
 # OS / editor noise
 .DS_Store
 Thumbs.db

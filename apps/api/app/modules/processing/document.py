@@ -1,9 +1,12 @@
-"""In-memory structured-document model produced by processors.
+"""Intermediate structured output of the built-in text processors.
 
-This is the processor output contract — independent of persistence and of any
-specific file format. Offsets are character positions into the document's
-canonical text (:attr:`StructuredDocument.text`), which downstream modules use
-as the basis for stable anchors.
+Scope note (Sprint 6.3.5): this type is **internal to the parser layer**. It is
+no longer persisted and no longer a downstream contract — parsers convert it into
+the Document Model (``document_model``), which is the single source of truth.
+A parser written directly against the Document Model does not use it at all.
+
+Offsets are character positions into :attr:`StructuredDocument.text`, the
+canonical text that stable anchors address.
 """
 
 from __future__ import annotations

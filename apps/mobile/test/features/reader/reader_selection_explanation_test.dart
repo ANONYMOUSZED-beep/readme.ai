@@ -2,16 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:readme_ai/features/explanation/presentation/explanation_sheet.dart';
 import 'package:readme_ai/features/reader/domain/character_anchor.dart';
-import 'package:readme_ai/features/reader/presentation/widgets/explainable_text.dart';
+import 'package:readme_ai/features/reader/presentation/rendering/page_body.dart';
 
 import '../../helpers/fake_explanation_repository.dart';
 import '../../helpers/fake_reader_repository.dart';
 import '../../helpers/pump_reader.dart';
 
+/// Selection now spans the whole page, so the gesture targets the page body
+/// rather than a single text widget. The toolbar and its Explain action are
+/// unchanged from the reader's previous behaviour.
 Future<void> _selectAndExplain(WidgetTester tester) async {
-  // Long-press selects the word under the press and shows the selection
-  // toolbar, which includes our "Explain" action.
-  await tester.longPress(find.byType(ExplainableText));
+  // Press on a glyph near the start of the first rendered line, inside the
+  // page's single selection domain.
+  final text = find.descendant(
+    of: find.byType(PageBody),
+    matching: find.byType(Text),
+  );
+  expect(text, findsWidgets);
+  final rect = tester.getRect(text.first);
+  await tester.longPressAt(Offset(rect.left + 20, rect.top + 6));
   await tester.pumpAndSettle();
   final contextualExplain = find.descendant(
     of: find.byType(AdaptiveTextSelectionToolbar),
@@ -54,9 +63,9 @@ void main() {
     await tester.tap(find.byIcon(Icons.close));
     await tester.pumpAndSettle();
 
-    // Sheet dismissed; the reader (with its selectable text) is still there.
+    // Sheet dismissed; the reader (with its selectable page) is still there.
     expect(find.byType(ExplanationSheet), findsNothing);
-    expect(find.byType(ExplainableText), findsOneWidget);
+    expect(find.byType(PageBody), findsOneWidget);
   });
 
   testWidgets('Explain sends exact Unicode scalar anchors for selected text', (

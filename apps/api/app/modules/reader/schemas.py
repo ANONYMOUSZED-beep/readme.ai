@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -89,3 +90,62 @@ class BookmarkListResponse(BaseModel):
 
     items: list[BookmarkResponse] = Field(description="The bookmarks.")
     total: int = Field(description="Number of bookmarks returned.")
+
+
+class DocumentElementResponse(BaseModel):
+    """One document element as delivered to the reader.
+
+    ``payload`` carries type-specific fields exactly as stored, so a future
+    element type reaches the client without a schema change here.
+    """
+
+    id: str = Field(description="Stable element identifier.")
+    parent_id: str | None = Field(
+        default=None,
+        description="Parent element, or the document id for top-level elements.",
+    )
+    type: str = Field(description="Element type name.")
+    order_index: int = Field(description="Order among siblings.")
+    sequence: int = Field(description="Position in document order.")
+    start_offset: int | None = Field(
+        default=None,
+        description="Canonical start offset, or null for elements without text.",
+    )
+    end_offset: int | None = Field(
+        default=None,
+        description="Canonical end offset (exclusive), or null.",
+    )
+    page_number: int | None = Field(
+        default=None,
+        description="Source page number when the origin format had one (metadata).",
+    )
+    payload: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Type-specific fields, passed through as stored.",
+    )
+    text: str | None = Field(
+        default=None,
+        description=(
+            "Element text, sent only when it cannot be derived from the "
+            "canonical text the client already holds."
+        ),
+    )
+
+
+class DocumentElementWindowResponse(BaseModel):
+    """A bounded window of a book's document elements, in document order."""
+
+    book_id: uuid.UUID = Field(description="The book these elements belong to.")
+    start: int = Field(description="Canonical start offset of the window served.")
+    end: int = Field(
+        description="Canonical end offset of the window served, after clamping.",
+    )
+    character_count: int = Field(
+        description="Total canonical characters in the document.",
+    )
+    truncated: bool = Field(
+        description="Whether the element cap stopped the window short.",
+    )
+    elements: list[DocumentElementResponse] = Field(
+        description="Elements in document order.",
+    )

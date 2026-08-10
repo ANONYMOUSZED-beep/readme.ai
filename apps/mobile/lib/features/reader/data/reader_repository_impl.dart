@@ -2,8 +2,10 @@ import 'package:dio/dio.dart';
 
 import '../domain/book_content.dart';
 import '../domain/bookmark.dart';
+import '../domain/element_window.dart';
 import '../domain/reader_repository.dart';
 import '../domain/reading_progress.dart';
+import 'element_dtos.dart';
 import 'reader_dtos.dart';
 
 /// [ReaderRepository] backed by the ReadMe.ai HTTP API via [Dio].
@@ -20,6 +22,24 @@ class ReaderRepositoryImpl implements ReaderRepository {
       '$_base/$bookId/content',
     );
     return BookContentDto.fromJson(response.data!).toDomain();
+  }
+
+  @override
+  Future<ElementWindow> getElements(
+    String bookId, {
+    required int start,
+    required int end,
+  }) async {
+    final response = await _dio.get<Map<String, dynamic>>(
+      '$_base/$bookId/content/elements',
+      queryParameters: {'start': start, 'end': end},
+    );
+    final data = response.data;
+    if (data == null) {
+      // A body-less 200 is not worth failing a page over.
+      return ElementWindow.empty(start: start, end: end);
+    }
+    return ElementWindowDecoder.decode(data);
   }
 
   @override

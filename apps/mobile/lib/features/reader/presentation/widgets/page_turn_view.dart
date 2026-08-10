@@ -52,13 +52,40 @@ class _PageTurnViewState extends State<PageTurnView>
     if (oldWidget.turnDuration != widget.turnDuration) {
       _turnController.duration = widget.turnDuration;
     }
-    if (widget.itemCount != oldWidget.itemCount ||
-        widget.initialPage != oldWidget.initialPage) {
+    // An externally requested page (a bookmark jump, a restored position, or a
+    // re-paginated layout) replaces whatever is on screen, including a turn in
+    // flight.
+    if (widget.initialPage != oldWidget.initialPage) {
       _pageIndex = _clampedPage(widget.initialPage);
-      _targetPage = null;
-      _dragDistance = 0;
-      _turnController.value = 0;
+      _abandonTurn();
+      return;
     }
+
+    // The page count grows as the document is measured incrementally, so it
+    // changes constantly while reading a long book. That must not disturb the
+    // current page or cancel a turn: cancelling one silently swallows the
+    // reader's tap, because `onPageChanged` only fires when a turn completes.
+    // Only an index that no longer exists forces a correction.
+    if (widget.itemCount != oldWidget.itemCount) {
+      final clamped = _clampedPage(_pageIndex);
+      final target = _targetPage;
+      if (clamped != _pageIndex) {
+        _pageIndex = clamped;
+        _abandonTurn();
+      } else if (target != null && target >= widget.itemCount) {
+        _abandonTurn();
+      }
+    }
+  }
+
+  /// Drops a turn in progress without reporting it, leaving [_pageIndex] as the
+  /// visible page.
+  void _abandonTurn() {
+    _targetPage = null;
+    _dragDistance = 0;
+    _turnController
+      ..stop()
+      ..value = 0;
   }
 
   @override

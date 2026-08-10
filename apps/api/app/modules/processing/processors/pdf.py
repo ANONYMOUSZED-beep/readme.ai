@@ -22,6 +22,7 @@ from app.modules.processing.document import (
 )
 from app.modules.processing.enums import ProcessingErrorCode
 from app.modules.processing.processors.base import ProcessingError
+from app.modules.processing.sentence_splitter import split_sentences
 
 _PDF_MIME_TYPES = frozenset({"application/pdf", "application/x-pdf"})
 _PDF_SUFFIXES = frozenset({".pdf"})
@@ -136,7 +137,7 @@ def _assign_offsets(
             cursor += len(_PARAGRAPH_SEPARATOR)
         paragraph.start_offset = cursor
         paragraph.end_offset = cursor + len(paragraph.text)
-        for start, end in _split_sentences(paragraph.text):
+        for start, end in split_sentences(paragraph.text):
             paragraph.sentences.append(
                 ParsedSentence(
                     start_offset=paragraph.start_offset + start,
@@ -168,37 +169,3 @@ def _span(
 def _suffix(filename: str) -> str:
     dot = filename.rfind(".")
     return filename[dot:].lower() if dot != -1 else ""
-
-
-def _split_sentences(text: str) -> list[tuple[int, int]]:
-    """Return trimmed (start, end) spans of sentences within ``text``."""
-    spans: list[tuple[int, int]] = []
-    length = len(text)
-    index = 0
-    start: int | None = None
-
-    while index < length:
-        char = text[index]
-        if start is None and not char.isspace():
-            start = index
-        if char in ".!?":
-            end = index + 1
-            while end < length and text[end] in ".!?":
-                end += 1
-            boundary = end >= length or text[end].isspace()
-            if boundary and start is not None:
-                spans.append((start, end))
-                start = None
-            index = end
-            continue
-        index += 1
-
-    if start is not None:
-        end = length
-        while end > start and text[end - 1].isspace():
-            end -= 1
-        spans.append((start, end))
-
-    if not spans and text.strip():
-        return [(0, len(text.rstrip()))]
-    return spans

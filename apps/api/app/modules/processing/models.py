@@ -1,37 +1,50 @@
-"""ORM models for processed (structured) book content.
+"""ORM models for processed content.
 
-Normalised hierarchy: ``ProcessedBook`` -> ``Chapter`` -> ``Section`` ->
-``Paragraph`` -> ``Sentence``. Text is stored exactly once, on ``Paragraph``;
-sentences and higher levels carry only character offsets into the canonical
-document text, so there is no content duplication.
+Two concerns, deliberately separated:
 
-Each structural row carries a ``processed_book_id`` (a denormalised parent
-reference) and a deterministic ``anchor``. The denormalisation enables efficient
-single-table reads (e.g. reconstructing the document by ordering paragraphs)
-without walking the hierarchy, which matters for very large books.
+* ``ProcessedBook`` — the processing *record*: lifecycle status, the parser that
+  ran, document-level metadata, and failure detail. One row per book.
+* ``StoredDocument`` + ``StoredDocumentElement`` — the persisted **Document
+  Model** (Sprint 6.2), the single source of truth for document content.
+
+The canonical reading text is stored exactly once, on ``StoredDocument.text``.
+Every element carries only ``start_offset``/``end_offset`` into that text, so no
+element duplicates document characters. Element rows are a flat, adjacency-list
+representation of the tree: ``parent_element_id`` plus ``order_index`` reproduce
+the hierarchy on read, which keeps writes to a single bulk insert and makes
+child lookups a single indexed range scan instead of a chain of joins.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.modules.processing.enums import ProcessingStatus
 
-_ANCHOR_LEN = 128
+_ID_LEN = 128
+_REFERENCE_LEN = 1024
+
+# JSONB on PostgreSQL (indexable, binary) and JSON on SQLite (tests).
+_JSON = JSON().with_variant(JSONB, "postgresql")
 
 
 def _utcnow() -> datetime:
@@ -94,88 +107,100 @@ class ProcessedBook(Base):
     )
 
 
-class Chapter(Base):
-    """A chapter within a processed document."""
+class StoredDocument(Base):
+    """The persisted Document Model root and its canonical reading text."""
 
-    __tablename__ = "processed_chapters"
+    __tablename__ = "documents"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    # The Document Model's own stable, deterministic ID — not a surrogate key.
+    id: Mapped[str] = mapped_column(String(_ID_LEN), primary_key=True)
     processed_book_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("processed_books.id", ondelete="CASCADE"),
+        unique=True,
         index=True,
         nullable=False,
     )
-    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    anchor: Mapped[str] = mapped_column(String(_ANCHOR_LEN), nullable=False)
-    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    start_offset: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    end_offset: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
-
-class Section(Base):
-    """A section within a chapter."""
-
-    __tablename__ = "processed_sections"
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    processed_book_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("processed_books.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
+    # Source traceability (never part of the logical hierarchy).
+    source_page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_bounding_box: Mapped[dict[str, Any] | None] = mapped_column(
+        _JSON, nullable=True
     )
-    chapter_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("processed_chapters.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
+    source_reference: Mapped[str | None] = mapped_column(
+        String(_REFERENCE_LEN), nullable=True
     )
-    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    anchor: Mapped[str] = mapped_column(String(_ANCHOR_LEN), nullable=False)
-    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    start_offset: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    end_offset: Mapped[int] = mapped_column(BigInteger, nullable=False)
-
-
-class Paragraph(Base):
-    """A paragraph — the only row that stores text."""
-
-    __tablename__ = "processed_paragraphs"
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    processed_book_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("processed_books.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
+    attributes: Mapped[dict[str, Any]] = mapped_column(
+        _JSON, default=dict, nullable=False
     )
-    section_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("processed_sections.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    # Global ordering across the whole document for efficient reconstruction.
-    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    anchor: Mapped[str] = mapped_column(String(_ANCHOR_LEN), nullable=False)
-    start_offset: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    end_offset: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    # The canonical character stream every offset and anchor addresses. Stored
+    # once, here; the reader reads it in a single row lookup.
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    character_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
-class Sentence(Base):
-    """A sentence, addressed only by offsets (text derived from the paragraph)."""
+class StoredDocumentElement(Base):
+    """One Document Model element, stored as an adjacency-list row."""
 
-    __tablename__ = "processed_sentences"
+    __tablename__ = "document_elements"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    processed_book_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("processed_books.id", ondelete="CASCADE"),
-        index=True,
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"),
         nullable=False,
     )
-    paragraph_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("processed_paragraphs.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
+    element_id: Mapped[str] = mapped_column(String(_ID_LEN), nullable=False)
+    # Intentionally not a foreign key: the tree is validated by the Document
+    # Model aggregate on save and on load, so the database does not impose an
+    # insert order and the whole document is written in one bulk insert.
+    parent_element_id: Mapped[str | None] = mapped_column(
+        String(_ID_LEN), nullable=True
     )
+    element_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Sibling order within the parent (semantic, from the Document Model).
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    anchor: Mapped[str] = mapped_column(String(_ANCHOR_LEN), nullable=False)
-    start_offset: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    end_offset: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Position in the document's element collection (storage order), so a load
+    # reconstructs the aggregate exactly as the parser produced it.
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Span into StoredDocument.text; NULL for elements without readable text.
+    start_offset: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    end_offset: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    source_page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_bounding_box: Mapped[dict[str, Any] | None] = mapped_column(
+        _JSON, nullable=True
+    )
+    source_reference: Mapped[str | None] = mapped_column(
+        String(_REFERENCE_LEN), nullable=True
+    )
+
+    # Type-specific fields (title, code, language, image identifier, table cell
+    # spans, metadata key/value, and unknown future fields) — one column, so a
+    # new element type needs no schema change.
+    payload: Mapped[dict[str, Any]] = mapped_column(_JSON, default=dict, nullable=False)
+    attributes: Mapped[dict[str, Any]] = mapped_column(
+        _JSON, default=dict, nullable=False
+    )
+    # Inline runs. NULL when they are derivable from the span (see the codec),
+    # which keeps sentence rows from duplicating the entire book text.
+    content: Mapped[list[Any] | None] = mapped_column(_JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "element_id", name="uq_document_element_id"),
+        Index("ix_document_elements_sequence", "document_id", "sequence"),
+        Index(
+            "ix_document_elements_children",
+            "document_id",
+            "parent_element_id",
+            "order_index",
+        ),
+        Index(
+            "ix_document_elements_span",
+            "document_id",
+            "element_type",
+            "start_offset",
+            "end_offset",
+        ),
+    )

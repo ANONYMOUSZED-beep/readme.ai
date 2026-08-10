@@ -2,6 +2,7 @@ import 'package:readme_ai/features/reader/domain/book_content.dart';
 import 'package:readme_ai/features/reader/domain/bookmark.dart';
 import 'package:readme_ai/features/reader/domain/character_anchor.dart';
 import 'package:readme_ai/features/reader/domain/content_format.dart';
+import 'package:readme_ai/features/reader/domain/element_window.dart';
 import 'package:readme_ai/features/reader/domain/reader_repository.dart';
 import 'package:readme_ai/features/reader/domain/reading_progress.dart';
 
@@ -11,11 +12,17 @@ class FakeReaderRepository implements ReaderRepository {
     BookContent? content,
     ReadingProgress? progress,
     List<Bookmark>? bookmarks,
+    ElementWindow? elements,
   }) : _content = content ?? textContent(),
        _progress = progress,
-       _bookmarks = [...?bookmarks];
+       _bookmarks = [...?bookmarks],
+       _elements = elements;
 
   final BookContent _content;
+  final ElementWindow? _elements;
+
+  /// Ranges requested through [getElements] (for assertions).
+  final List<(int, int)> requestedWindows = [];
   ReadingProgress? _progress;
   final List<Bookmark> _bookmarks;
 
@@ -49,6 +56,16 @@ class FakeReaderRepository implements ReaderRepository {
 
   @override
   Future<BookContent> getContent(String bookId) async => _content;
+
+  @override
+  Future<ElementWindow> getElements(
+    String bookId, {
+    required int start,
+    required int end,
+  }) async {
+    requestedWindows.add((start, end));
+    return _elements ?? ElementWindow.empty(start: start, end: end);
+  }
 
   @override
   Future<ReadingProgress?> getProgress(String bookId) async => _progress;
