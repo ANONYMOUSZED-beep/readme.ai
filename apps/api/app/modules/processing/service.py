@@ -1,7 +1,9 @@
 """Processing service — orchestrates the processing pipeline.
 
-Pipeline: resolve owned book -> mark PROCESSING -> read bytes -> select
-processor -> produce structured document -> persist -> COMPLETED / FAILED.
+Pipeline: resolve owned book -> mark PROCESSING -> read bytes -> select a parser
+from the registry -> parse into the Document Model -> persist -> COMPLETED /
+FAILED. The engine depends only on ``ParserRegistry`` and the ``DocumentParser``
+interface, never on a concrete parser or a format-specific exception.
 All failures are recorded as structured errors; processing never raises to the
 caller for an expected failure (unsupported/malformed/too-large), so triggering
 it during upload cannot fail the upload.
@@ -18,11 +20,13 @@ from app.modules.library.enums import BookStatus
 from app.modules.library.service import BookService
 from app.modules.processing.enums import ProcessingErrorCode, ProcessingStatus
 from app.modules.processing.models import ProcessedBook
+from app.modules.processing.parsers import (
+    ParseRequest,
+    ParserError,
+    ParserRegistry,
+)
 from app.modules.processing.processors.base import ProcessingError
-from app.modules.processing.registry import ProcessorRegistry
 from app.modules.processing.repository import ProcessingRepository
-
-_PARAGRAPH_SEPARATOR = "\n\n"
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +45,7 @@ class ProcessingService:
         repository: ProcessingRepository,
         book_service: BookService,
         storage: StorageService,
-        registry: ProcessorRegistry,
+        registry: ParserRegistry,
         *,
         max_document_bytes: int,
     ) -> None:
@@ -72,23 +76,34 @@ class ProcessingService:
                     ProcessingErrorCode.TOO_LARGE,
                     "The document is too large to process.",
                 )
-            processor = self._registry.select(
+            # The engine knows only the registry and the parser interface; which
+            # parser runs, and which format it understands, is not its concern.
+            parser = self._registry.require(
                 mime_type=book.mime_type, filename=book.original_filename
             )
-            if processor is None:
-                raise ProcessingError(
-                    ProcessingErrorCode.UNSUPPORTED_FORMAT,
-                    f"No processor supports '{book.mime_type}'.",
-                )
-            document = await asyncio.to_thread(
-                processor.process,
-                filename=book.original_filename,
-                mime_type=book.mime_type,
-                data=data,
+            result = await asyncio.to_thread(
+                parser.parse,
+                ParseRequest(
+                    filename=book.original_filename,
+                    mime_type=book.mime_type,
+                    data=data,
+                    source_reference=book.storage_key,
+                ),
             )
-            await self._repository.save_completed(record, document, processor.name)
+            await self._repository.save_completed(
+                record,
+                document=result.document,
+                text=result.canonical_text,
+                metadata=result.metadata,
+                parser_name=result.parser_name,
+            )
             book.status = BookStatus.READY
-            book.total_pages = document.metadata.page_count
+            book.total_pages = result.metadata.page_count
+        except ParserError as error:
+            await self._repository.save_failed(
+                record, error.processing_code, error.message
+            )
+            book.status = BookStatus.FAILED
         except ProcessingError as error:
             await self._repository.save_failed(record, error.code, error.message)
             book.status = BookStatus.FAILED
@@ -137,8 +152,9 @@ class ProcessingService:
                 character_count=0,
             )
 
-        paragraphs = await self._repository.get_paragraph_texts(record.id)
-        text = _PARAGRAPH_SEPARATOR.join(paragraphs)
+        # A single row read of the canonical text — no per-paragraph
+        # reconstruction, regardless of document size.
+        text = await self._repository.get_document_text(record.id) or ""
         return ReaderContent(
             status=ProcessingStatus.COMPLETED,
             title=record.title or book.title,

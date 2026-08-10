@@ -13,9 +13,19 @@ import '../domain/book_content.dart';
 import '../domain/bookmark.dart';
 import '../domain/character_anchor.dart';
 import '../domain/content_format.dart';
-import 'pagination/document_paginator.dart';
+import '../domain/document_outline.dart';
+import '../domain/document_pagination_source.dart';
+import '../domain/pagination_source.dart';
+import '../domain/reader_element.dart';
+import 'pagination/document_page.dart';
+import 'pagination/reading_paginator.dart';
+import 'rendering/element_renderer.dart';
+import 'rendering/element_renderer_registry.dart';
+import 'rendering/page_body.dart';
+import 'rendering/page_composer.dart';
+import 'rendering/render_block.dart';
+import 'rendering/selection_resolver.dart';
 import 'widgets/bookmarks_sheet.dart';
-import 'widgets/explainable_text.dart';
 import 'widgets/page_turn_view.dart';
 import 'widgets/reader_settings_sheet.dart';
 
@@ -30,7 +40,9 @@ class ReaderScreen extends ConsumerStatefulWidget {
 }
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen> {
-  static const _paginator = DocumentPaginator();
+  /// How many pages ahead of the current one to prepare, so the reader can turn
+  /// forward without waiting for measurement.
+  static const int _lookahead = 2;
 
   final Stopwatch _sessionStopwatch = Stopwatch()..start();
   late final ReaderController _readerController;
@@ -38,8 +50,25 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   double _progress = 0;
   int _characterCount = 0;
   int _currentOffset = 0;
+  int _currentIndex = 0;
   String? _contentText;
-  List<DocumentPage> _pages = const [];
+
+  // Incremental pagination state. The paginator measures only the pages needed
+  // for the current reading window; it is recreated when the layout key
+  // (font/size/viewport) changes, preserving the current character offset.
+  PaginationSource? _source;
+  String? _sourceText;
+  ReadingPaginator? _paginator;
+  PaginationKey? _paginationKey;
+
+  // Structured rendering. The composer turns a measured page plus the elements
+  // covering it into render blocks; the registry maps each block to a renderer.
+  // None of this participates in pagination — page boundaries are already fixed
+  // by the measurer over canonical text.
+  final PageComposer _composer = PageComposer();
+  final ElementRendererRegistry _registry = ElementRendererRegistry.standard();
+  static const SelectionResolver _selectionResolver = SelectionResolver();
+  DocumentOutline? _outline;
 
   @override
   void initState() {
@@ -49,8 +78,105 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   @override
   void dispose() {
-    _persistPosition();
+    // Persistence on teardown is best-effort: if the surrounding scope is
+    // already gone, losing the final position must not throw during disposal.
+    try {
+      _persistPosition();
+    } on Object {
+      // Intentionally ignored; the last saved position stands.
+    }
+    _paginator?.removeListener(_onPaginatorChanged);
+    _paginator?.dispose();
     super.dispose();
+  }
+
+  void _onPaginatorChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Returns the paginator for the current layout, creating a new one only when
+  /// the layout key changes. Construction is cheap and does no measurement;
+  /// pagination is kicked off after the frame, never inside `build()`.
+  ReadingPaginator _ensurePaginator({
+    required String text,
+    required TextStyle style,
+    required Size pageSize,
+    required TextDirection textDirection,
+    required TextScaler textScaler,
+    required Locale? locale,
+  }) {
+    if (_source == null || _sourceText != text) {
+      final outline = _outline;
+      // Structured when an outline is available, canonical text otherwise. The
+      // choice is made once, here; nothing downstream branches on it.
+      _source = outline == null
+          ? StringPaginationSource(text)
+          : DocumentPaginationSource(canonicalText: text, outline: outline);
+      _sourceText = text;
+    }
+
+    final key = PaginationKey(
+      fontSize: style.fontSize ?? 0,
+      lineHeight: style.height ?? 0,
+      width: pageSize.width,
+      height: pageSize.height,
+      textScalerDescription: textScaler.toString(),
+      textDirection: textDirection,
+      locale: locale,
+    );
+
+    if (_paginator == null || _paginationKey != key) {
+      final previous = _paginator;
+      previous?.removeListener(_onPaginatorChanged);
+      previous?.dispose();
+
+      final paginator = ReadingPaginator(
+        source: _source!,
+        style: style,
+        pageSize: pageSize,
+        textDirection: textDirection,
+        textScaler: textScaler,
+        locale: locale,
+      )..addListener(_onPaginatorChanged);
+      _paginator = paginator;
+      _paginationKey = key;
+
+      // Measure off the build phase: prepare the current page (and look-ahead)
+      // for wherever the reader currently is, not the whole document.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _paginator != paginator) return;
+        _prepareWindow(paginator);
+      });
+    }
+    return _paginator!;
+  }
+
+  Future<void> _prepareWindow(ReadingPaginator paginator) async {
+    final index = await paginator.ensureOffset(_currentOffset);
+    if (!mounted || _paginator != paginator) return;
+    setState(() => _currentIndex = index);
+    unawaited(paginator.ensureIndex(index + _lookahead));
+    unawaited(_prepareStructure(paginator, index));
+  }
+
+  /// Loads the structure covering the current page and its look-ahead.
+  ///
+  /// Always off the build phase, and never fatal: if elements cannot be loaded
+  /// the page still renders from canonical text.
+  Future<void> _prepareStructure(ReadingPaginator paginator, int index) async {
+    final outline = _outline;
+    if (outline == null) return;
+    final page = paginator.pageOrNull(index);
+    if (page == null) return;
+    final last = paginator.pageOrNull(index + _lookahead) ?? page;
+    try {
+      await outline.ensureRange(page.startOffset, last.endOffset);
+      unawaited(outline.prefetchAfter(last.endOffset));
+    } on Object {
+      // Degradation is the design: reading continues on canonical text.
+      return;
+    }
+    if (mounted && _paginator == paginator) setState(() {});
   }
 
   void _persistPosition() {
@@ -79,35 +205,51 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 ((percentage / 100).clamp(0.0, 1.0) * _characterCount).round())
             .clamp(0, _characterCount);
     _progress = (_currentOffset / _characterCount).clamp(0.0, 1.0);
+
+    // Reading progress resolves asynchronously, so it can arrive after the
+    // paginator's initial window (built for offset 0) was already prepared.
+    // Align the reading window to the restored offset off the build phase.
+    if (_currentOffset > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final paginator = _paginator;
+        if (mounted && paginator != null) _prepareWindow(paginator);
+      });
+    }
   }
 
-  void _jumpToAnchor(String anchor) {
+  Future<void> _jumpToAnchor(String anchor) async {
     if (_characterCount == 0) return;
     final offset = (int.tryParse(anchor) ?? 0).clamp(0, _characterCount);
-    setState(() {
-      _currentOffset = offset;
-      _progress = (_currentOffset / _characterCount).clamp(0.0, 1.0);
-    });
+    _currentOffset = offset;
+    _progress = (_currentOffset / _characterCount).clamp(0.0, 1.0);
+
+    final paginator = _paginator;
+    if (paginator == null) {
+      setState(() {});
+    } else {
+      final index = await paginator.ensureOffset(offset);
+      if (!mounted) return;
+      setState(() => _currentIndex = index);
+      unawaited(paginator.ensureIndex(index + _lookahead));
+      unawaited(_prepareStructure(paginator, index));
+    }
     _persistPosition();
   }
 
-  int _pageForOffset(List<DocumentPage> pages, int offset) {
-    if (pages.isEmpty) return 0;
-    final index = pages.indexWhere(
-      (page) => offset >= page.startOffset && offset < page.endOffset,
-    );
-    return index == -1 ? pages.length - 1 : index;
-  }
-
-  void _onPageChanged(int index) {
-    if (index < 0 || index >= _pages.length) return;
+  void _onPageChanged(ReadingPaginator paginator, int index) {
+    final page = paginator.pageOrNull(index);
+    if (page == null) return;
     setState(() {
-      _currentOffset = _pages[index].startOffset;
+      _currentIndex = index;
+      _currentOffset = page.startOffset;
       _progress = _characterCount == 0
           ? 0
           : (_currentOffset / _characterCount).clamp(0.0, 1.0);
     });
     _persistPosition();
+    // Prepare the next few pages so the following turn is instant.
+    unawaited(paginator.ensureIndex(index + _lookahead));
+    unawaited(_prepareStructure(paginator, index));
   }
 
   Future<void> _addBookmark() async {
@@ -172,7 +314,78 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
+  /// Composes the blocks for a measured page.
+  ///
+  /// Structure is used only when it is already resident, so this never awaits
+  /// and never triggers I/O during a build. With no structure the composer
+  /// returns plain-text blocks covering the page exactly.
+  List<RenderBlock> _composeBlocks(DocumentPage page) {
+    final outline = _outline;
+    final elements =
+        outline != null && outline.isReady(page.startOffset, page.endOffset)
+        ? outline.elementsIn(page.startOffset, page.endOffset)
+        : const <ReaderElement>[];
+    return _composer.compose(page: page, elements: elements);
+  }
+
+  RenderContext _renderContext(ThemeData theme, TextStyle textStyle) {
+    final colors = theme.colorScheme;
+    return RenderContext(
+      bodyStyle: textStyle,
+      colors: RenderPalette(
+        text: colors.onSurface,
+        muted: colors.onSurfaceVariant,
+        accent: colors.primary,
+        surface: colors.surfaceContainerHighest,
+        outline: colors.outlineVariant,
+      ),
+      onLinkTap: _acknowledgeLink,
+    );
+  }
+
+  /// Hyperlinks acknowledge their target without leaving the Reader.
+  void _acknowledgeLink(String target) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(target), duration: const Duration(seconds: 2)),
+      );
+  }
+
+  /// Resolves a page selection to canonical offsets, then explains it.
+  ///
+  /// Resolution can decline: an unlocatable or ambiguous selection submits
+  /// nothing rather than a guessed range.
+  void _explainPageSelection(DocumentPage page, String selectedText) {
+    final span = _selectionResolver.resolve(
+      pageText: page.text,
+      pageStartOffset: page.startOffset,
+      selectedText: selectedText,
+      hintOffset: _currentOffset,
+    );
+    if (span == null) return;
+    _explainSelection(selectedText.trim(), span.start, span.end);
+  }
+
   void _explainCurrentPassage() {
+    // Whole-passage explanation prefers the readable element the reader is
+    // inside — paragraph, code block, list item, quote, caption or table cell —
+    // and falls back to the surrounding text block when structure is absent.
+    final element = _outline?.readableElementAt(_currentOffset);
+    final span = element?.span;
+    final text = _contentText;
+    if (span != null && text != null) {
+      final selected = CharacterAnchor.substring(text, span.start, span.end)
+          .trim();
+      if (selected.isNotEmpty) {
+        _explainSelection(selected, span.start, span.end);
+        return;
+      }
+    }
+    _explainSurroundingText();
+  }
+
+  void _explainSurroundingText() {
     final text = _contentText;
     if (text == null || text.isEmpty) return;
     final scalarOffset = _currentOffset.clamp(0, CharacterAnchor.length(text));
@@ -276,6 +489,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
     _characterCount = CharacterAnchor.length(content.text!);
     _contentText = content.text;
+    _outline ??= ref.read(documentOutlineProvider(widget.bookId));
     final progressAsync = ref.watch(readingProgressProvider(widget.bookId));
     final resume = progressAsync.value;
     if (resume != null) {
@@ -312,7 +526,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           (bookWidth - paperHorizontal * 2).clamp(1.0, double.infinity),
           (bookHeight - paperVertical * 2).clamp(1.0, double.infinity),
         );
-        final pages = _paginator.paginate(
+        final paginator = _ensurePaginator(
           text: content.text!,
           style: textStyle,
           pageSize: textSize,
@@ -320,8 +534,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           textScaler: MediaQuery.textScalerOf(context),
           locale: Localizations.localeOf(context),
         );
-        _pages = pages;
-        final currentPage = _pageForOffset(pages, _currentOffset);
+
+        // The first readable page is prepared off the build phase; until then
+        // show a lightweight indicator instead of blocking on the whole book.
+        if (!paginator.hasFirstPage) {
+          return const Center(
+            key: ValueKey('reader-preparing'),
+            child: CircularProgressIndicator(),
+          );
+        }
+
+        final pageCount = paginator.pageCount;
+        final currentPage = _currentIndex.clamp(0, pageCount - 1);
 
         return Padding(
           padding: EdgeInsets.fromLTRB(
@@ -354,34 +578,31 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(isWide ? 18 : 10),
                         child: PageTurnView(
-                          itemCount: pages.length,
+                          itemCount: pageCount,
                           initialPage: currentPage,
-                          onPageChanged: _onPageChanged,
+                          onPageChanged: (index) =>
+                              _onPageChanged(paginator, index),
                           itemBuilder: (context, index) {
-                            final page = pages[index];
+                            final page = paginator.pageOrNull(index);
+                            if (page == null) {
+                              unawaited(paginator.ensureIndex(index));
+                              return const SizedBox.shrink();
+                            }
                             return Padding(
                               padding: EdgeInsets.symmetric(
                                 horizontal: paperHorizontal,
                                 vertical: paperVertical,
                               ),
-                              child: ExplainableText(
-                                text: page.text,
+                              child: PageBody(
+                                blocks: _composeBlocks(page),
+                                registry: _registry,
                                 explainLabel: l10n.explain,
-                                style: textStyle,
-                                onExplain: (text, start, end) =>
-                                    _explainSelection(
-                                      text,
-                                      page.startOffset +
-                                          CharacterAnchor.fromCodeUnit(
-                                            page.text,
-                                            start,
-                                          ),
-                                      page.startOffset +
-                                          CharacterAnchor.fromCodeUnit(
-                                            page.text,
-                                            end,
-                                          ),
-                                    ),
+                                renderContext: _renderContext(
+                                  theme,
+                                  textStyle,
+                                ),
+                                onExplain: (selected) =>
+                                    _explainPageSelection(page, selected),
                               ),
                             );
                           },
@@ -394,7 +615,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                     child: Row(
                       children: [
                         Text(
-                          'Page ${currentPage + 1} of ${pages.length}',
+                          'Page ${currentPage + 1} of ${paginator.estimatedTotalPages}',
                           style: theme.textTheme.labelLarge?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                             fontWeight: FontWeight.w700,

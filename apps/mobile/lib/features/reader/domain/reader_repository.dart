@@ -1,5 +1,6 @@
 import 'book_content.dart';
 import 'bookmark.dart';
+import 'element_window.dart';
 import 'reading_progress.dart';
 
 /// Contract for the reading experience: content, position, and bookmarks.
@@ -10,6 +11,17 @@ import 'reading_progress.dart';
 abstract interface class ReaderRepository {
   /// Fetch the readable content for a book.
   Future<BookContent> getContent(String bookId);
+
+  /// Fetch the document elements covering a canonical offset range.
+  ///
+  /// A pure read. Implementations decode tolerantly: unknown element types and
+  /// individually malformed elements never fail the window, so the Reader can
+  /// always render something.
+  Future<ElementWindow> getElements(
+    String bookId, {
+    required int start,
+    required int end,
+  });
 
   /// Fetch saved reading progress, or `null` if the book is unstarted.
   Future<ReadingProgress?> getProgress(String bookId);

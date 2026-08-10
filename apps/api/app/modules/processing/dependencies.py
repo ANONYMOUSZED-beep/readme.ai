@@ -14,22 +14,54 @@ from app.core.storage.provider import get_storage_service
 from app.db.session import get_db_session
 from app.modules.library.dependencies import get_book_service
 from app.modules.library.service import BookService
+from app.modules.processing.parsers import (
+    ParserCapability,
+    ParserRegistry,
+    ProcessorBackedParser,
+    PyMuPdfParser,
+)
 from app.modules.processing.processors.pdf import PdfProcessor
 from app.modules.processing.processors.plain_text import PlainTextProcessor
-from app.modules.processing.registry import ProcessorRegistry
 from app.modules.processing.repository import ProcessingRepository
 from app.modules.processing.service import ProcessingService
 from app.modules.processing.trigger import InlineProcessingTrigger, ProcessingTrigger
 
 
 @lru_cache(maxsize=1)
-def get_processor_registry() -> ProcessorRegistry:
-    """Registry of available processors.
+def get_parser_registry() -> ParserRegistry:
+    """Registry of available document parsers.
 
-    Add future processors (PDF, EPUB, DOCX, OCR) to this list — the only place
-    that needs to change to support a new format.
+    This list is the only place that changes to support a new format. A future
+    PyMuPDF, EPUB, DOCX, HTML, Markdown, or OCR parser registers here with a
+    higher priority than the generic parsers, and nothing else in the pipeline
+    — engine, reader, pagination, explanation, or LIE — is modified.
     """
-    return ProcessorRegistry([PdfProcessor(), PlainTextProcessor()])
+    return ParserRegistry(
+        [
+            # PyMuPDF is the production PDF parser (rich structure, page
+            # coordinates). The pypdf-backed parser stays registered beneath it
+            # as a plain text-extraction fallback for operators who must disable
+            # PyMuPDF (it is AGPL/commercial dual-licensed).
+            PyMuPdfParser(),
+            ProcessorBackedParser(
+                PdfProcessor(),
+                priority=10,
+                display_name="PDF (text layer only)",
+                supported_mime_types=("application/pdf",),
+                supported_extensions=(".pdf",),
+            ),
+            ProcessorBackedParser(
+                PlainTextProcessor(),
+                display_name="Plain text & Markdown",
+                capabilities=(
+                    ParserCapability.TEXT,
+                    ParserCapability.METADATA,
+                ),
+                supported_mime_types=("text/plain", "text/markdown"),
+                supported_extensions=(".txt", ".md"),
+            ),
+        ]
+    )
 
 
 def get_processing_repository(
@@ -42,7 +74,7 @@ def get_processing_service(
     repository: Annotated[ProcessingRepository, Depends(get_processing_repository)],
     book_service: Annotated[BookService, Depends(get_book_service)],
     storage: Annotated[StorageService, Depends(get_storage_service)],
-    registry: Annotated[ProcessorRegistry, Depends(get_processor_registry)],
+    registry: Annotated[ParserRegistry, Depends(get_parser_registry)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ProcessingService:
     return ProcessingService(

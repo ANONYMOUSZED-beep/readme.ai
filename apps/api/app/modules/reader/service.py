@@ -13,7 +13,9 @@ from datetime import UTC, datetime
 
 from app.core.errors import NotFoundError
 from app.modules.library.service import BookService
+from app.modules.processing.element_query import DocumentElementQuery, ElementWindow
 from app.modules.processing.enums import ProcessingStatus
+from app.modules.processing.repository import ProcessingRepository
 from app.modules.processing.service import ProcessingService
 from app.modules.reader.content import ContentFormat, ReaderContentView
 from app.modules.reader.models import Bookmark, ReadingProgress
@@ -26,10 +28,14 @@ class ReaderService:
         repository: ReaderRepository,
         book_service: BookService,
         processing_service: ProcessingService,
+        processing_repository: ProcessingRepository,
+        elements: DocumentElementQuery,
     ) -> None:
         self._repository = repository
         self._book_service = book_service
         self._processing = processing_service
+        self._processing_repository = processing_repository
+        self._elements = elements
 
     async def get_content(
         self,
@@ -55,6 +61,34 @@ class ReaderService:
             text=None,
             character_count=0,
         )
+
+    async def get_elements(
+        self,
+        user_id: uuid.UUID,
+        book_id: uuid.UUID,
+        *,
+        start: int,
+        end: int,
+    ) -> ElementWindow:
+        """Return a bounded window of the book's document elements.
+
+        A pure read: ownership is resolved through the library service exactly as
+        :meth:`get_content` does, and nothing is written — no progress, no
+        timestamps, no metadata. Books that are not processed yield an empty
+        window rather than an error, so the reader can degrade to canonical text
+        instead of handling a failure.
+        """
+        await self._book_service.get_book(user_id, book_id)
+        record = await self._processing_repository.get_by_book_id(book_id)
+        if record is None or record.status is not ProcessingStatus.COMPLETED:
+            return ElementWindow(
+                start=max(0, start),
+                end=max(max(0, start), end),
+                character_count=0,
+                elements=(),
+                truncated=False,
+            )
+        return await self._elements.window(record.id, start=start, end=end)
 
     async def get_progress(
         self,

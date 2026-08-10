@@ -10,10 +10,21 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.auth.verifier import FirebaseIdentity
+from app.modules.processing.document_model import ElementType
 from app.modules.processing.models import (
-    Paragraph,
     ProcessedBook,
-    Sentence,
+    StoredDocument,
+    StoredDocumentElement,
+)
+from app.modules.processing.parsers import (
+    ParserCapability,
+    ParseRequest,
+    ParserError,
+    ParserErrorCode,
+    ParseResult,
+    ParserMetadata,
+    ParserRegistry,
+    ProgressCallback,
 )
 from tests.conftest import FakeTokenVerifier
 
@@ -110,7 +121,8 @@ async def test_pdf_upload_is_processed_and_readable(client: AsyncClient) -> None
 
     assert status_response.status_code == 200
     assert status_response.json()["status"] == "COMPLETED"
-    assert status_response.json()["processor_name"] == "pdf"
+    # PyMuPDF is the registered production PDF parser (Sprint 6.4).
+    assert status_response.json()["processor_name"] == "pymupdf"
     assert status_response.json()["page_count"] == 1
     assert content_response.status_code == 200
     assert content_response.json()["format"] == "text"
@@ -153,18 +165,38 @@ async def test_structure_is_persisted(
             select(ProcessedBook).where(ProcessedBook.book_id == uuid.UUID(book_id))
         )
         assert record is not None
+        stored = await session.scalar(
+            select(StoredDocument).where(StoredDocument.processed_book_id == record.id)
+        )
+        assert stored is not None
         paragraphs = await session.scalar(
             select(func.count())
-            .select_from(Paragraph)
-            .where(Paragraph.processed_book_id == record.id)
+            .select_from(StoredDocumentElement)
+            .where(
+                StoredDocumentElement.document_id == stored.id,
+                StoredDocumentElement.element_type == ElementType.PARAGRAPH.value,
+            )
         )
         sentences = await session.scalar(
             select(func.count())
-            .select_from(Sentence)
-            .where(Sentence.processed_book_id == record.id)
+            .select_from(StoredDocumentElement)
+            .where(
+                StoredDocumentElement.document_id == stored.id,
+                StoredDocumentElement.element_type == ElementType.SENTENCE.value,
+            )
+        )
+        sentence_rows = await session.scalars(
+            select(StoredDocumentElement.content).where(
+                StoredDocumentElement.document_id == stored.id,
+                StoredDocumentElement.element_type == ElementType.SENTENCE.value,
+            )
         )
     assert paragraphs == 2
     assert sentences >= 3
+    # The canonical text is stored once, on the document row.
+    assert stored.text == "First paragraph. Two sentences here.\n\nSecond paragraph."
+    # Sentence rows derive their text from the span instead of duplicating it.
+    assert all(content is None for content in sentence_rows.all())
 
 
 async def test_reprocess_transitions_to_completed(client: AsyncClient) -> None:
@@ -217,3 +249,58 @@ async def test_reader_serves_structured_text(client: AsyncClient) -> None:
     assert (
         body["content"] == "First paragraph. Two sentences here.\n\nSecond paragraph."
     )
+
+
+class _EncryptedStubParser:
+    """A parser that always reports an encrypted document.
+
+    Registered with a high priority to prove the engine resolves parsers purely
+    through the registry and records parser failures structurally.
+    """
+
+    @property
+    def metadata(self) -> ParserMetadata:
+        return ParserMetadata(
+            name="encrypted_stub",
+            version="0.1.0",
+            display_name="Encrypted Stub",
+            capabilities=frozenset({ParserCapability.TEXT}),
+            priority=100,
+        )
+
+    def supports(self, *, mime_type: str, filename: str) -> bool:
+        return filename.endswith(".locked")
+
+    def parse(
+        self,
+        request: ParseRequest,
+        on_progress: ProgressCallback | None = None,
+    ) -> ParseResult:
+        raise ParserError(
+            ParserErrorCode.ENCRYPTED_DOCUMENT,
+            "The document is password protected.",
+            parser_name="encrypted_stub",
+        )
+
+
+async def test_engine_selects_a_newly_registered_parser(
+    client: AsyncClient,
+    parser_registry: ParserRegistry,
+) -> None:
+    parser_registry.register(_EncryptedStubParser())
+
+    book_id = await _upload(client, filename="secret.txt.locked", mime="text/plain")
+    response = await client.get(f"{_BOOKS}/{book_id}/processing", headers=_AUTH)
+
+    body = response.json()
+    assert body["status"] == "FAILED"
+    # Parser-layer failures are recorded through the existing processing codes.
+    assert body["error_code"] == "malformed_file"
+
+
+async def test_engine_records_the_selected_parser_name(client: AsyncClient) -> None:
+    book_id = await _upload(client)
+
+    response = await client.get(f"{_BOOKS}/{book_id}/processing", headers=_AUTH)
+
+    assert response.json()["processor_name"] == "plain_text"

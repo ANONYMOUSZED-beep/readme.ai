@@ -152,6 +152,82 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
+  testWidgets('a page turn survives the item count growing mid-turn', (
+    tester,
+  ) async {
+    // The reader paginates incrementally, so `itemCount` grows while the
+    // document is still being measured. A count change arriving during a turn
+    // must not cancel it: on a long book that silently swallows the reader's
+    // tap and the page never changes.
+    final turns = <int>[];
+    Widget app(int itemCount) => MaterialApp(
+      home: Scaffold(
+        body: PageTurnView(
+          itemCount: itemCount,
+          onPageChanged: turns.add,
+          itemBuilder: (context, index) => Text('Page ${index + 1}'),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(app(3));
+    await tester.tap(find.byTooltip('Next page'));
+    await tester.pump(const Duration(milliseconds: 120));
+
+    // Measurement completes another chunk while the turn is still animating.
+    await tester.pumpWidget(app(9));
+    await tester.pumpAndSettle();
+
+    expect(turns, [1], reason: 'the turn was cancelled by the count change');
+    expect(find.text('Page 2'), findsOneWidget);
+  });
+
+  testWidgets('growing the item count leaves the resting page alone', (
+    tester,
+  ) async {
+    Widget app(int itemCount) => MaterialApp(
+      home: Scaffold(
+        body: PageTurnView(
+          itemCount: itemCount,
+          initialPage: 1,
+          itemBuilder: (context, index) => Text('Page ${index + 1}'),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(app(3));
+    await tester.tap(find.byTooltip('Next page'));
+    await tester.pumpAndSettle();
+    expect(find.text('Page 3'), findsOneWidget);
+
+    await tester.pumpWidget(app(40));
+    await tester.pumpAndSettle();
+    expect(find.text('Page 3'), findsOneWidget);
+  });
+
+  testWidgets('a shrinking item count clamps the visible page', (tester) async {
+    Widget app(int itemCount) => MaterialApp(
+      home: Scaffold(
+        body: PageTurnView(
+          itemCount: itemCount,
+          itemBuilder: (context, index) => Text('Page ${index + 1}'),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(app(6));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    expect(find.text('Page 3'), findsOneWidget);
+
+    // Re-pagination can replace the measured set with a shorter one.
+    await tester.pumpWidget(app(2));
+    await tester.pumpAndSettle();
+    expect(find.text('Page 2'), findsOneWidget);
+  });
+
   testWidgets('navigation is a no-op at first and last page boundaries', (
     tester,
   ) async {
