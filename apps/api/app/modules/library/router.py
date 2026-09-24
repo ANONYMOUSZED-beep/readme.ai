@@ -6,12 +6,29 @@ import uuid
 
 from fastapi import APIRouter, File, Form, UploadFile, status
 
+from app.core.errors import PayloadTooLargeError
 from app.modules.auth.dependencies import CurrentUser
 from app.modules.library.dependencies import BookServiceDep
 from app.modules.library.schemas import BookListResponse, BookResponse
 from app.modules.processing.dependencies import ProcessingTriggerDep
 
 router = APIRouter()
+
+# Uploads are read in bounded chunks so an oversized file is rejected as soon as
+# it crosses the limit instead of being loaded into memory in full first.
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+async def _read_upload(file: UploadFile, limit: int) -> bytes:
+    buffer = bytearray()
+    while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+        buffer.extend(chunk)
+        if len(buffer) > limit:
+            raise PayloadTooLargeError(
+                "Uploaded file exceeds the maximum allowed size.",
+                details={"max_bytes": limit},
+            )
+    return bytes(buffer)
 
 
 @router.post(
@@ -33,15 +50,21 @@ async def upload_book(
     today, a background worker later) and never fails the upload — processing
     errors are recorded as the book's processing status.
     """
-    content = await file.read()
+    # Plain ids are captured because a rollback inside processing expires the
+    # session's ORM instances (``user`` included).
+    user_id = user.id
+    content = await _read_upload(file, service.max_upload_size_bytes)
     book = await service.upload(
-        user_id=user.id,
+        user_id=user_id,
         filename=file.filename or "book",
         content=content,
         content_type=file.content_type,
         title=title,
     )
-    await processing.schedule(user.id, book.id)
+    book_id = book.id
+    await processing.schedule(user_id, book_id)
+    # Re-read so the response reflects the status processing just recorded.
+    book = await service.get_book(user_id, book_id)
     return BookResponse.model_validate(book)
 
 
