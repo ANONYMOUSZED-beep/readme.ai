@@ -11,6 +11,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy.exc import IntegrityError
+
 from app.core.errors import NotFoundError
 from app.modules.library.service import BookService
 from app.modules.processing.enums import ProcessingStatus
@@ -74,25 +76,38 @@ class ReaderService:
         progress_percentage: float,
         reading_time_seconds: int,
     ) -> ReadingProgress:
-        """Create or update the user's reading position for a book."""
+        """Create or update the user's reading position for a book.
+
+        Two concurrent first saves (e.g. a debounced save racing the save on
+        leaving the reader) both see "no progress"; the loser of the unique
+        constraint re-reads the winner's row and applies its update to it.
+        """
         await self._book_service.get_book(user_id, book_id)
 
         progress = await self._repository.get_progress(user_id, book_id)
         if progress is None:
-            progress = ReadingProgress(
-                user_id=user_id,
-                book_id=book_id,
-                current_position=current_position,
-                progress_percentage=progress_percentage,
-                total_reading_time_seconds=reading_time_seconds,
-            )
-            await self._repository.add_progress(progress)
-        else:
-            progress.current_position = current_position
-            progress.progress_percentage = progress_percentage
-            progress.total_reading_time_seconds += reading_time_seconds
-            progress.last_read_at = datetime.now(tz=UTC)
+            try:
+                progress = await self._repository.add_progress(
+                    ReadingProgress(
+                        user_id=user_id,
+                        book_id=book_id,
+                        current_position=current_position,
+                        progress_percentage=progress_percentage,
+                        total_reading_time_seconds=reading_time_seconds,
+                    )
+                )
+                await self._repository.commit()
+                return progress
+            except IntegrityError:
+                await self._repository.rollback()
+                progress = await self._repository.get_progress(user_id, book_id)
+                if progress is None:
+                    raise
 
+        progress.current_position = current_position
+        progress.progress_percentage = progress_percentage
+        progress.total_reading_time_seconds += reading_time_seconds
+        progress.last_read_at = datetime.now(tz=UTC)
         await self._repository.commit()
         return progress
 

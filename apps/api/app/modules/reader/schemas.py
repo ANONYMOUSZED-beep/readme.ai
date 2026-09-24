@@ -53,6 +53,9 @@ class UpdateProgressRequest(BaseModel):
     reading_time_seconds: int = Field(
         default=0,
         ge=0,
+        # One save never accounts for more than a day of reading; this also
+        # keeps the running total well inside the column's integer range.
+        le=86_400,
         description="Reading time to add for this session, in seconds.",
     )
 

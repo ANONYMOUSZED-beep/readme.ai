@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from httpx import AsyncClient
 
 from app.modules.auth.verifier import FirebaseIdentity
+from app.modules.reader.models import ReadingProgress
+from app.modules.reader.repository import ReaderRepository
 from tests.conftest import FakeTokenVerifier
 
 _AUTH = {"Authorization": "Bearer valid-token"}
@@ -166,3 +169,64 @@ async def test_user_cannot_read_another_users_book(
 async def test_get_content_missing_book_returns_404(client: AsyncClient) -> None:
     response = await client.get(f"{_BOOKS_URL}/{uuid.uuid4()}/content", headers=_AUTH)
     assert response.status_code == 404
+
+
+async def test_reading_time_per_save_is_bounded(client: AsyncClient) -> None:
+    book_id = await _upload_text_book(client)
+
+    response = await client.put(
+        f"{_BOOKS_URL}/{book_id}/progress",
+        headers=_AUTH,
+        json={
+            "current_position": "0",
+            "progress_percentage": 1.0,
+            "reading_time_seconds": 86_401,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+async def test_concurrent_first_progress_save_updates_winning_row(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    book_id = await _upload_text_book(client)
+    first = await client.put(
+        f"{_BOOKS_URL}/{book_id}/progress",
+        headers=_AUTH,
+        json={
+            "current_position": "10",
+            "progress_percentage": 10.0,
+            "reading_time_seconds": 5,
+        },
+    )
+    assert first.status_code == 200
+
+    # The next save's lookup misses the row a concurrent request just created.
+    original = ReaderRepository.get_progress
+    calls = 0
+
+    async def racing_lookup(
+        self: ReaderRepository, user_id: uuid.UUID, book: uuid.UUID
+    ) -> ReadingProgress | None:
+        nonlocal calls
+        calls += 1
+        return None if calls == 1 else await original(self, user_id, book)
+
+    monkeypatch.setattr(ReaderRepository, "get_progress", racing_lookup)
+
+    second = await client.put(
+        f"{_BOOKS_URL}/{book_id}/progress",
+        headers=_AUTH,
+        json={
+            "current_position": "20",
+            "progress_percentage": 20.0,
+            "reading_time_seconds": 7,
+        },
+    )
+
+    assert second.status_code == 200
+    body = second.json()
+    assert body["current_position"] == "20"
+    assert body["total_reading_time_seconds"] == 12

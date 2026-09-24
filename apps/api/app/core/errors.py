@@ -30,6 +30,7 @@ class ErrorCode(StrEnum):
     FORBIDDEN = "forbidden"
     NOT_FOUND = "not_found"
     CONFLICT = "conflict"
+    PAYLOAD_TOO_LARGE = "payload_too_large"
     DEPENDENCY_UNAVAILABLE = "dependency_unavailable"
     INTERNAL = "internal_error"
 
@@ -41,6 +42,7 @@ _STATUS_BY_CODE: dict[ErrorCode, int] = {
     ErrorCode.FORBIDDEN: status.HTTP_403_FORBIDDEN,
     ErrorCode.NOT_FOUND: status.HTTP_404_NOT_FOUND,
     ErrorCode.CONFLICT: status.HTTP_409_CONFLICT,
+    ErrorCode.PAYLOAD_TOO_LARGE: status.HTTP_413_CONTENT_TOO_LARGE,
     ErrorCode.DEPENDENCY_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
     ErrorCode.INTERNAL: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
@@ -95,11 +97,17 @@ class ForbiddenError(AppError):
     code = ErrorCode.FORBIDDEN
 
 
+class PayloadTooLargeError(AppError):
+    code = ErrorCode.PAYLOAD_TOO_LARGE
+
+
 class DependencyUnavailableError(AppError):
     code = ErrorCode.DEPENDENCY_UNAVAILABLE
 
 
-def _envelope(code: ErrorCode, message: str, details: dict[str, Any]) -> dict[str, Any]:
+def error_envelope(
+    code: ErrorCode, message: str, details: dict[str, Any]
+) -> dict[str, Any]:
     """Build the canonical error response body."""
     return {
         "error": {
@@ -123,7 +131,7 @@ def register_error_handlers(app: FastAPI) -> None:
         )
         return JSONResponse(
             status_code=exc.status_code,
-            content=_envelope(exc.code, exc.message, exc.details),
+            content=error_envelope(exc.code, exc.message, exc.details),
         )
 
     @app.exception_handler(RequestValidationError)
@@ -132,7 +140,7 @@ def register_error_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         return JSONResponse(
             status_code=_STATUS_BY_CODE[ErrorCode.VALIDATION],
-            content=_envelope(
+            content=error_envelope(
                 ErrorCode.VALIDATION,
                 "Request validation failed.",
                 {"errors": jsonable_encoder(exc.errors())},
@@ -149,7 +157,7 @@ def register_error_handlers(app: FastAPI) -> None:
         message = exc.detail if isinstance(exc.detail, str) else "Request failed."
         return JSONResponse(
             status_code=exc.status_code,
-            content=_envelope(code, message, {}),
+            content=error_envelope(code, message, {}),
         )
 
     @app.exception_handler(Exception)
@@ -161,7 +169,7 @@ def register_error_handlers(app: FastAPI) -> None:
         )
         return JSONResponse(
             status_code=_STATUS_BY_CODE[ErrorCode.INTERNAL],
-            content=_envelope(
+            content=error_envelope(
                 ErrorCode.INTERNAL,
                 "An unexpected error occurred.",
                 {},
