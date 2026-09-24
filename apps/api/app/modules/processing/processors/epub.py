@@ -19,8 +19,9 @@ from io import BytesIO
 from urllib.parse import unquote
 from xml.etree import ElementTree
 
+from app.core.images import MAX_COVER_BYTES, sniff_image_type
 from app.modules.processing.builder import Block, Heading, TextBlock, build_document
-from app.modules.processing.document import StructuredDocument
+from app.modules.processing.document import CoverImage, StructuredDocument
 from app.modules.processing.enums import ProcessingErrorCode
 from app.modules.processing.processors.base import ProcessingError
 
@@ -101,12 +102,14 @@ class EpubProcessor:
                 blocks = list(_blocks(archive, package))
             except (KeyError, ElementTree.ParseError, zipfile.BadZipFile) as exc:
                 raise _malformed("The EPUB archive is damaged or incomplete.") from exc
+            cover = _read_cover(archive, package.cover)
 
         return build_document(
             blocks,
             title=package.title,
             author=package.author,
             language=package.language,
+            cover=cover,
         )
 
 
@@ -116,6 +119,7 @@ class _Package:
     author: str | None = None
     language: str | None = None
     documents: list[str] = field(default_factory=list)
+    cover: str | None = None
 
 
 def _malformed(message: str) -> ProcessingError:
@@ -160,6 +164,7 @@ def _read_package(archive: zipfile.ZipFile) -> _Package:
 
     manifest: dict[str, tuple[str, str, str]] = {}
     spine: list[str] = []
+    cover_id: str | None = None
     for element in opf.iter():
         tag = _local(element.tag)
         text = (element.text or "").strip()
@@ -177,6 +182,25 @@ def _read_package(archive: zipfile.ZipFile) -> _Package:
             )
         elif tag == "itemref" and element.get("linear", "yes") != "no":
             spine.append(element.get("idref", ""))
+        elif tag == "meta" and element.get("name") == "cover":
+            # EPUB 2 convention: <meta name="cover" content="manifest-id"/>.
+            cover_id = cover_id or element.get("content")
+
+    # EPUB 3 marks the cover with a manifest property; fall back to EPUB 2.
+    cover_href = next(
+        (
+            href
+            for href, _, props in manifest.values()
+            if "cover-image" in props.split()
+        ),
+        None,
+    )
+    if cover_href is None and cover_id in manifest:
+        cover_href = manifest[cover_id][0]
+    if cover_href:
+        package.cover = posixpath.normpath(
+            posixpath.join(base, unquote(cover_href.split("#")[0]))
+        )
 
     for idref in spine[:_MAX_SPINE_ITEMS]:
         item = manifest.get(idref)
@@ -193,6 +217,21 @@ def _read_package(archive: zipfile.ZipFile) -> _Package:
         raise _malformed("The EPUB has no readable content documents.")
     _reject_encrypted(archive, package.documents)
     return package
+
+
+def _read_cover(archive: zipfile.ZipFile, path: str | None) -> CoverImage | None:
+    """Best-effort cover extraction: a missing or odd cover never fails a book."""
+    if path is None:
+        return None
+    try:
+        info = archive.getinfo(path)
+        if info.file_size > MAX_COVER_BYTES:
+            return None
+        data = archive.read(info)
+    except (KeyError, zipfile.BadZipFile, ValueError):
+        return None
+    media_type = sniff_image_type(data)
+    return CoverImage(data=data, media_type=media_type) if media_type else None
 
 
 def _reject_encrypted(archive: zipfile.ZipFile, documents: list[str]) -> None:

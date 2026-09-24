@@ -39,6 +39,20 @@ class ReaderRepository:
         await self._session.flush()
         return progress
 
+    async def list_recent_progress(
+        self,
+        user_id: uuid.UUID,
+        limit: int,
+    ) -> list[ReadingProgress]:
+        """The user's reading positions, most recently read first."""
+        result = await self._session.execute(
+            select(ReadingProgress)
+            .where(ReadingProgress.user_id == user_id)
+            .order_by(ReadingProgress.last_read_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
     # --- Bookmarks ---------------------------------------------------------
     async def list_bookmarks(
         self,

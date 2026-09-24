@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, File, Form, UploadFile, status
+from fastapi import APIRouter, File, Form, Response, UploadFile, status
 
 from app.core.errors import PayloadTooLargeError
 from app.modules.auth.dependencies import CurrentUser
@@ -85,6 +85,30 @@ async def get_book(
     """Return a single book owned by the current user."""
     book = await service.get_book(user.id, book_id)
     return BookResponse.model_validate(book)
+
+
+@router.get(
+    "/{book_id}/cover",
+    response_class=Response,
+    responses={
+        200: {"content": {"image/*": {}}, "description": "The cover image."},
+        404: {"description": "The book is not the caller's or has no cover."},
+    },
+    summary="Get a book's cover image",
+)
+async def get_cover(
+    book_id: uuid.UUID,
+    user: CurrentUser,
+    service: BookServiceDep,
+) -> Response:
+    """Return the cover picture extracted from the book, when it has one."""
+    data, media_type = await service.get_cover(user.id, book_id)
+    # Private: covers are per-user content. Safe to cache briefly on-device.
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @router.delete(

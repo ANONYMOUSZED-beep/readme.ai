@@ -70,6 +70,18 @@ class ProcessingRepository:
         )
         return list(result.scalars().all())
 
+    async def get_chapter_outline(
+        self,
+        processed_book_id: uuid.UUID,
+    ) -> list[tuple[str | None, int]]:
+        """Return ``(title, start_offset)`` for each chapter, in order."""
+        result = await self._session.execute(
+            select(Chapter.title, Chapter.start_offset)
+            .where(Chapter.processed_book_id == processed_book_id)
+            .order_by(Chapter.order_index)
+        )
+        return [(title, int(start)) for title, start in result.all()]
+
     async def get_paragraphs_overlapping(
         self,
         processed_book_id: uuid.UUID,

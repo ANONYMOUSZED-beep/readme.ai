@@ -7,6 +7,7 @@ import uuid
 from pathlib import PurePosixPath
 
 from app.core.errors import NotFoundError, PayloadTooLargeError, ValidationError
+from app.core.images import sniff_image_type
 from app.core.logging import get_logger
 from app.core.storage.base import StorageService
 from app.modules.library.enums import BookStatus
@@ -128,10 +129,45 @@ class BookService:
         hiccup can at worst leave an unreachable object, never a broken book.
         """
         book = await self.get_book(user_id, book_id)
-        storage_key = book.storage_key
+        storage_keys = [book.storage_key]
+        if book.cover_storage_key:
+            storage_keys.append(book.cover_storage_key)
         await self._repository.delete(book)
         await self._repository.commit()
-        await self._discard_object(storage_key)
+        for key in storage_keys:
+            await self._discard_object(key)
+
+    async def get_cover(
+        self, user_id: uuid.UUID, book_id: uuid.UUID
+    ) -> tuple[bytes, str]:
+        """Return an owned book's cover image and its MIME type."""
+        book = await self.get_book(user_id, book_id)
+        if book.cover_storage_key is None:
+            raise NotFoundError("This book has no cover.")
+        data = await self._storage.read(book.cover_storage_key)
+        media_type = sniff_image_type(data)
+        if media_type is None:  # pragma: no cover - only valid images are stored
+            raise NotFoundError("This book has no cover.")
+        return data, media_type
+
+    async def replace_cover(self, book: Book, data: bytes | None) -> None:
+        """Store (or, with ``None``, remove) the book's cover and commit.
+
+        Covers live next to the book file under a fixed key, so re-processing
+        simply overwrites the previous cover.
+        """
+        previous = book.cover_storage_key
+        if data is None:
+            if previous is None:
+                return
+            book.cover_storage_key = None
+            await self._repository.commit()
+            await self._discard_object(previous)
+            return
+        key = f"users/{book.user_id}/books/{book.id}.cover"
+        await self._storage.save(key, data, content_type=sniff_image_type(data))
+        book.cover_storage_key = key
+        await self._repository.commit()
 
     def apply_processing_state(
         self,

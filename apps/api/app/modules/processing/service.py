@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.core.logging import get_logger
 from app.core.storage.base import StorageService
@@ -36,6 +36,14 @@ _INTERNAL_ERROR_MESSAGE = "An unexpected error occurred while processing the boo
 
 
 @dataclass(frozen=True, slots=True)
+class ChapterMark:
+    """Where a chapter starts in the reader's text (for a table of contents)."""
+
+    title: str | None
+    start_offset: int
+
+
+@dataclass(frozen=True, slots=True)
 class ReaderContent:
     """Readable content derived from a processed document, for the reader."""
 
@@ -43,6 +51,7 @@ class ReaderContent:
     title: str
     text: str | None
     character_count: int
+    chapters: list[ChapterMark] = field(default_factory=list)
 
 
 class ProcessingService:
@@ -111,7 +120,28 @@ class ProcessingService:
             return await self._record_failure(
                 user_id, book_id, ProcessingErrorCode.INTERNAL, _INTERNAL_ERROR_MESSAGE
             )
-        return record
+
+        if await self._store_cover(book, document, book_id):
+            return record
+        # The rollback expired loaded rows; re-read the committed record.
+        refreshed = await self._repository.get_by_book_id(book_id)
+        return refreshed if refreshed is not None else record
+
+    async def _store_cover(
+        self, book: Book, document: StructuredDocument, book_id: uuid.UUID
+    ) -> bool:
+        """Save (or clear) the cover. Best effort: never fails the book.
+
+        Returns ``False`` when it failed and the session was rolled back.
+        """
+        cover = document.cover.data if document.cover else None
+        try:
+            await self._book_service.replace_cover(book, cover)
+        except Exception:
+            logger.exception("processing.cover_failed", extra={"book_id": str(book_id)})
+            await self._repository.rollback()
+            return False
+        return True
 
     async def _produce(
         self,
@@ -191,10 +221,14 @@ class ProcessingService:
             )
 
         paragraphs = await self._repository.get_paragraph_texts(record.id)
+        outline = await self._repository.get_chapter_outline(record.id)
         text = PARAGRAPH_SEPARATOR.join(paragraphs)
         return ReaderContent(
             status=ProcessingStatus.COMPLETED,
             title=book.title,
             text=text,
             character_count=len(text),
+            chapters=[
+                ChapterMark(title=title, start_offset=start) for title, start in outline
+            ],
         )

@@ -101,8 +101,27 @@ def make_epub(
     encrypted: bool = False,
     extra_manifest: str = "",
     extra_spine: str = "",
+    cover: bytes | None = None,
+    cover_style: str = "epub3",
 ) -> bytes:
-    """Build an EPUB whose spine holds one XHTML document per ``chapters`` body."""
+    """Build an EPUB whose spine holds one XHTML document per ``chapters`` body.
+
+    ``cover`` embeds a cover image, declared the EPUB 3 way (manifest
+    ``properties="cover-image"``) or, with ``cover_style="epub2"``, via
+    ``<meta name="cover">``.
+    """
+    cover_meta = ""
+    if cover is not None:
+        if cover_style == "epub3":
+            extra_manifest += (
+                '<item id="cover-img" href="images/cover.jpg" '
+                'media-type="image/jpeg" properties="cover-image"/>'
+            )
+        else:
+            extra_manifest += (
+                '<item id="cover-img" href="images/cover.jpg" media-type="image/jpeg"/>'
+            )
+            cover_meta = '<meta name="cover" content="cover-img"/>'
     manifest = "\n".join(
         f'<item id="c{i}" href="text/chapter%20{i}.xhtml" '
         'media-type="application/xhtml+xml"/>'
@@ -116,6 +135,7 @@ def make_epub(
     <dc:title>{title}</dc:title>
     <dc:creator>{author}</dc:creator>
     <dc:language>{language}</dc:language>
+    {cover_meta}
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"
@@ -151,6 +171,8 @@ def make_epub(
                 "<style>p { color: red; }</style></head>"
                 f"<body>{body}</body></html>",
             )
+        if cover is not None:
+            archive.writestr("OEBPS/images/cover.jpg", cover)
         if encrypted:
             archive.writestr(
                 "META-INF/encryption.xml",

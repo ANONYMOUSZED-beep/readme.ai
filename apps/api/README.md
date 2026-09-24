@@ -17,12 +17,14 @@ Markdown, plain text), the reader, and contextual explanations.
 | GET | `/api/v1/books` | bearer | List the user's books |
 | GET | `/api/v1/books/{id}` | bearer | Get one owned book |
 | DELETE | `/api/v1/books/{id}` | bearer | Delete an owned book + its file |
-| GET | `/api/v1/books/{id}/content` | bearer | Readable content (from structured doc) |
+| GET | `/api/v1/books/{id}/cover` | bearer | Cover image, when `has_cover` is true (EPUB) |
+| GET | `/api/v1/books/{id}/content` | bearer | Readable content + chapter outline |
 | GET/PUT | `/api/v1/books/{id}/progress` | bearer | Get / save reading position |
 | GET/POST | `/api/v1/books/{id}/bookmarks` | bearer | List / create bookmarks |
 | DELETE | `/api/v1/books/{id}/bookmarks/{bid}` | bearer | Delete a bookmark |
 | GET/POST | `/api/v1/books/{id}/processing` | bearer | Get status / re-run processing |
 | POST | `/api/v1/books/{id}/explain` | bearer | Explain a word / sentence / passage |
+| GET | `/api/v1/reading/recent` | bearer | Recently read books with progress ("continue reading") |
 
 Request and response schemas are browsable in the interactive docs at `/docs`
 (OpenAPI at `/openapi.json`; both disabled in production).
@@ -32,7 +34,7 @@ Request and response schemas are browsable in the interactive docs at `/docs`
 | Format | Detected by | Notes |
 | --- | --- | --- |
 | PDF | `application/pdf` or `.pdf` | Text-based PDFs; lines are re-flowed into paragraphs. Scanned (image-only) and password-protected PDFs fail with a clear reason. |
-| EPUB 2/3 | `application/epub+zip` or `.epub` | Spine reading order; headings become chapters/sections. DRM-protected books are rejected. |
+| EPUB 2/3 | `application/epub+zip` or `.epub` | Spine reading order; headings become chapters/sections; the cover image is extracted. DRM-protected books are rejected. |
 | Markdown / text | `text/*` or `.txt`, `.md`, `.markdown`, `.text` | `#` starts a chapter, `##`–`######` a section. UTF-8/UTF-16 (BOM) and Windows-1252 are decoded. |
 
 Uploads are processed immediately. The book's `status` becomes `READY` or

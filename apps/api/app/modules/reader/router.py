@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
 from app.modules.auth.dependencies import CurrentUser
 from app.modules.reader.dependencies import ReaderServiceDep
@@ -16,12 +16,35 @@ from app.modules.reader.schemas import (
     BookContentResponse,
     BookmarkListResponse,
     BookmarkResponse,
+    ChapterResponse,
     CreateBookmarkRequest,
     ReadingProgressResponse,
+    RecentReadingListResponse,
     UpdateProgressRequest,
 )
 
 router = APIRouter()
+
+# Mounted under /api/v1/reading: a path such as /api/v1/books/recent would be
+# captured by the library's /api/v1/books/{book_id} route.
+recent_router = APIRouter()
+
+
+@recent_router.get(
+    "/recent",
+    response_model=RecentReadingListResponse,
+    summary="Books the user is reading",
+)
+async def list_recent(
+    user: CurrentUser,
+    service: ReaderServiceDep,
+    limit: int = Query(default=10, ge=1, le=50, description="Maximum items."),
+) -> RecentReadingListResponse:
+    """Return saved reading positions, most recently read first."""
+    progress = await service.list_recent(user.id, limit)
+    return RecentReadingListResponse(
+        items=[ReadingProgressResponse.model_validate(item) for item in progress]
+    )
 
 
 @router.get(
@@ -42,6 +65,10 @@ async def get_content(
         format=view.format,
         content=view.text,
         character_count=view.character_count,
+        chapters=[
+            ChapterResponse(title=title, start_offset=start)
+            for title, start in view.chapters
+        ],
     )
 
 

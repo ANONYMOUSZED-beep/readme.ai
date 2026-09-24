@@ -26,6 +26,9 @@ api_router.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 api_router.include_router(library.router, prefix="/api/v1/books", tags=["library"])
 api_router.include_router(reader.router, prefix="/api/v1/books", tags=["reader"])
 api_router.include_router(
+    reader.recent_router, prefix="/api/v1/reading", tags=["reader"]
+)
+api_router.include_router(
     processing.router, prefix="/api/v1/books", tags=["processing"]
 )
 api_router.include_router(

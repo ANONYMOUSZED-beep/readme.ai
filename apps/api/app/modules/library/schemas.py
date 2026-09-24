@@ -29,6 +29,10 @@ class BookResponse(BaseModel):
         default=None,
         description="URL of the cover image, if available.",
     )
+    has_cover: bool = Field(
+        default=False,
+        description="Whether GET /api/v1/books/{id}/cover serves a cover image.",
+    )
     uploaded_at: datetime = Field(description="When the file was uploaded.")
     created_at: datetime = Field(description="When the record was created.")
     updated_at: datetime = Field(description="When the record was last updated.")

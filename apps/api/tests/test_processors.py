@@ -7,6 +7,7 @@ import zipfile
 
 import pytest
 
+from app.core.images import sniff_image_type
 from app.modules.processing.builder import Heading, TextBlock, build_document
 from app.modules.processing.document import StructuredDocument
 from app.modules.processing.enums import ProcessingErrorCode
@@ -332,3 +333,42 @@ def test_registry_returns_none_for_unknown_formats() -> None:
     )
 
     assert registry.select(mime_type="application/zip", filename="a.zip") is None
+
+
+# --- covers ----------------------------------------------------------------------
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+
+
+@pytest.mark.parametrize("style", ["epub3", "epub2"])
+def test_epub_cover_is_extracted(style: str) -> None:
+    data = make_epub(["<p>Text.</p>"], cover=JPEG, cover_style=style)
+
+    document = EpubProcessor().process(filename="b.epub", mime_type="", data=data)
+
+    assert document.cover is not None
+    assert document.cover.media_type == "image/jpeg"
+    assert document.cover.data == JPEG
+
+
+def test_epub_cover_that_is_not_an_image_is_ignored() -> None:
+    data = make_epub(["<p>Text.</p>"], cover=b"<svg>not a raster</svg>")
+
+    document = EpubProcessor().process(filename="b.epub", mime_type="", data=data)
+
+    assert document.cover is None
+    assert _paragraphs(document) == ["Text."]
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (JPEG, "image/jpeg"),
+        (b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, "image/png"),
+        (b"GIF89a....", "image/gif"),
+        (b"RIFF\x00\x00\x00\x00WEBPVP8 ", "image/webp"),
+        (b"<svg/>", None),
+        (b"", None),
+    ],
+)
+def test_sniff_image_type(data: bytes, expected: str | None) -> None:
+    assert sniff_image_type(data) == expected

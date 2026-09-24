@@ -63,6 +63,14 @@ class DocumentMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class CoverImage:
+    """A book's cover picture, as found in the source file."""
+
+    data: bytes
+    media_type: str
+
+
+@dataclass(frozen=True, slots=True)
 class StructuredDocument:
     """The complete structured representation a processor produces."""
 
@@ -70,3 +78,4 @@ class StructuredDocument:
     chapters: list[ParsedChapter]
     # Canonical reading text; all offsets index into this string.
     text: str
+    cover: CoverImage | None = None

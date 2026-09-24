@@ -18,6 +18,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from app.modules.processing.document import (
+    CoverImage,
     DocumentMetadata,
     ParsedChapter,
     ParsedParagraph,
@@ -71,6 +72,7 @@ def build_document(
     author: str | None = None,
     language: str | None = None,
     page_count: int | None = None,
+    cover: CoverImage | None = None,
 ) -> StructuredDocument:
     """Assemble a structured document from a processor's block stream.
 
@@ -104,7 +106,9 @@ def build_document(
             math.ceil(word_count / _WORDS_PER_MINUTE) if word_count else None
         ),
     )
-    return StructuredDocument(metadata=metadata, chapters=chapters, text=text)
+    return StructuredDocument(
+        metadata=metadata, chapters=chapters, text=text, cover=cover
+    )
 
 
 def clean_paragraph(text: str) -> str:

@@ -50,6 +50,10 @@ class ReaderService:
                 title=content.title,
                 text=content.text,
                 character_count=content.character_count,
+                chapters=[
+                    (chapter.title, chapter.start_offset)
+                    for chapter in content.chapters
+                ],
             )
         return ReaderContentView(
             format=ContentFormat.UNSUPPORTED,
@@ -110,6 +114,18 @@ class ReaderService:
         progress.last_read_at = datetime.now(tz=UTC)
         await self._repository.commit()
         return progress
+
+    async def list_recent(
+        self,
+        user_id: uuid.UUID,
+        limit: int,
+    ) -> list[ReadingProgress]:
+        """Books the user has been reading, most recent first.
+
+        Progress rows are owned by the user and deleted with their book, so no
+        per-book ownership check is needed.
+        """
+        return await self._repository.list_recent_progress(user_id, limit)
 
     async def list_bookmarks(
         self,
