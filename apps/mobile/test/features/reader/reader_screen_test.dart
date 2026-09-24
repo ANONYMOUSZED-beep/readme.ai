@@ -45,7 +45,7 @@ void main() {
     expect(container.read(readerSettingsProvider).fontSize, initial + 2);
   });
 
-  testWidgets('reader settings toggle dark mode', (tester) async {
+  testWidgets('reader settings switch to a dark page', (tester) async {
     final container = await pumpReader(
       tester,
       repository: FakeReaderRepository(),
@@ -53,7 +53,7 @@ void main() {
 
     await tester.tap(find.byTooltip('Reader settings'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(SwitchListTile));
+    await tester.tap(find.text('Dark'));
     await tester.pumpAndSettle();
 
     expect(container.read(themeModeProvider), ThemeMode.dark);

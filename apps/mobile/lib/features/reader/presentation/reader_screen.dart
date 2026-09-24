@@ -166,6 +166,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      // Size to the controls instead of the default 9/16-height cap.
+      isScrollControlled: true,
       builder: (_) => const ReaderSettingsSheet(),
     );
   }
@@ -191,10 +193,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final contentState = ref.watch(bookContentProvider(widget.bookId));
     final theme = Theme.of(context);
 
+    // Sepia applies to the light theme only; dark mode has its own page.
+    final sepia =
+        ref.watch(readerSettingsProvider.select((s) => s.sepia)) &&
+        theme.brightness == Brightness.light;
+
     return Scaffold(
+      backgroundColor: sepia ? AppColors.sepiaCanvas : null,
       appBar: AppBar(
         toolbarHeight: 68,
-        backgroundColor: theme.colorScheme.surface,
+        backgroundColor: sepia
+            ? AppColors.sepiaPage
+            : theme.colorScheme.surface,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -278,6 +288,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
     final settings = ref.watch(readerSettingsProvider);
     final theme = Theme.of(context);
+    final sepia = settings.sepia && theme.brightness == Brightness.light;
 
     return NotificationListener<ScrollUpdateNotification>(
       key: const ValueKey('text-reader'),
@@ -306,10 +317,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       vertical: 42,
                     ),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.surface,
+                      color: sepia
+                          ? AppColors.sepiaPage
+                          : theme.colorScheme.surface,
                       borderRadius: BorderRadius.circular(24),
                       border: Border.all(
-                        color: theme.colorScheme.outlineVariant,
+                        color: sepia
+                            ? AppColors.sepiaBorder
+                            : theme.colorScheme.outlineVariant,
                       ),
                       boxShadow: [
                         BoxShadow(
@@ -327,8 +342,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                             fontSize: settings.fontSize,
                             height: settings.lineHeight,
                             letterSpacing: 0.05,
+                            fontFamily: settings.fontFamily,
+                            color: sepia ? AppColors.sepiaInk : null,
                           ) ??
-                          TextStyle(fontSize: settings.fontSize),
+                          TextStyle(
+                            fontSize: settings.fontSize,
+                            fontFamily: settings.fontFamily,
+                          ),
                       onExplain: _explainSelection,
                     ),
                   ),

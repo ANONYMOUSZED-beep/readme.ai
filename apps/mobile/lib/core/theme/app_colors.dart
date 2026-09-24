@@ -15,4 +15,10 @@ abstract final class AppColors {
   static const Color darkCanvas = Color(0xFF111219);
   static const Color darkSurface = Color(0xFF1A1B24);
   static const Color darkRaised = Color(0xFF22232D);
+
+  // Sepia reading palette: warm paper, softened ink.
+  static const Color sepiaCanvas = Color(0xFFEFE5CF);
+  static const Color sepiaPage = Color(0xFFF8F1E0);
+  static const Color sepiaInk = Color(0xFF4A3A2A);
+  static const Color sepiaBorder = Color(0xFFE2D3B3);
 }

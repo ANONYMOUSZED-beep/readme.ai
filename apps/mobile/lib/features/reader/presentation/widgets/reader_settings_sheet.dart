@@ -9,13 +9,27 @@ import '../../application/reader_settings_controller.dart';
 class ReaderSettingsSheet extends ConsumerWidget {
   const ReaderSettingsSheet({super.key});
 
+  static void _setTone(WidgetRef ref, ReaderPageTone tone) {
+    ref
+        .read(themeModeProvider.notifier)
+        .setMode(
+          tone == ReaderPageTone.dark ? ThemeMode.dark : ThemeMode.light,
+        );
+    ref
+        .read(readerSettingsProvider.notifier)
+        .setSepia(enabled: tone == ReaderPageTone.sepia);
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(readerSettingsProvider);
     final controller = ref.read(readerSettingsProvider.notifier);
-    final themeMode = ref.watch(themeModeProvider);
-    final isDark = themeMode == ThemeMode.dark;
     final theme = Theme.of(context);
+    final tone = theme.brightness == Brightness.dark
+        ? ReaderPageTone.dark
+        : settings.sepia
+        ? ReaderPageTone.sepia
+        : ReaderPageTone.light;
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -39,17 +53,19 @@ class ReaderSettingsSheet extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(width: 13),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Reading style', style: theme.textTheme.titleLarge),
-                    Text(
-                      'Make the page feel right for you',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Reading style', style: theme.textTheme.titleLarge),
+                      Text(
+                        'Make the page feel right for you',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -57,29 +73,45 @@ class ReaderSettingsSheet extends ConsumerWidget {
             _ControlCard(
               child: Column(
                 children: [
-                  SwitchListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                    secondary: Container(
-                      width: 38,
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(11),
+                  _ChoiceRow<ReaderPageTone>(
+                    icon: Icons.contrast_rounded,
+                    label: 'Page',
+                    selected: tone,
+                    segments: const [
+                      ButtonSegment(
+                        value: ReaderPageTone.light,
+                        label: Text('Light'),
                       ),
-                      child: Icon(
-                        isDark
-                            ? Icons.dark_mode_rounded
-                            : Icons.light_mode_outlined,
-                        size: 19,
-                        color: theme.colorScheme.primary,
+                      ButtonSegment(
+                        value: ReaderPageTone.sepia,
+                        label: Text('Sepia'),
                       ),
-                    ),
-                    title: const Text('Dark mode'),
-                    subtitle: Text(isDark ? 'Easy on the eyes' : 'Warm paper'),
-                    value: isDark,
-                    onChanged: (enabled) => ref
-                        .read(themeModeProvider.notifier)
-                        .setMode(enabled ? ThemeMode.dark : ThemeMode.light),
+                      ButtonSegment(
+                        value: ReaderPageTone.dark,
+                        label: Text('Dark'),
+                      ),
+                    ],
+                    onChanged: (value) => _setTone(ref, value),
+                  ),
+                  Divider(color: theme.colorScheme.outlineVariant),
+                  _ChoiceRow<ReaderFont>(
+                    icon: Icons.font_download_outlined,
+                    label: 'Font',
+                    selected: settings.font,
+                    segments: const [
+                      ButtonSegment(
+                        value: ReaderFont.serif,
+                        label: Text(
+                          'Serif',
+                          style: TextStyle(fontFamily: 'Lora'),
+                        ),
+                      ),
+                      ButtonSegment(
+                        value: ReaderFont.sans,
+                        label: Text('Sans'),
+                      ),
+                    ],
+                    onChanged: controller.setFont,
                   ),
                   Divider(color: theme.colorScheme.outlineVariant),
                   _StepperRow(
@@ -135,6 +167,59 @@ class _ControlCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         child: child,
+      ),
+    );
+  }
+}
+
+/// A labelled single-choice segmented control.
+class _ChoiceRow<T> extends StatelessWidget {
+  const _ChoiceRow({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.segments,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String label;
+  final T selected;
+  final List<ButtonSegment<T>> segments;
+  final ValueChanged<T> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(icon, size: 19, color: theme.colorScheme.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(label, style: theme.textTheme.titleMedium)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Full width below the label, so it fits the narrowest phones.
+          SegmentedButton<T>(
+            segments: segments,
+            selected: {selected},
+            showSelectedIcon: false,
+            onSelectionChanged: (values) => onChanged(values.first),
+          ),
+        ],
       ),
     );
   }
