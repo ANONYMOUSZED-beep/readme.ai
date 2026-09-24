@@ -3,6 +3,7 @@ import 'package:readme_ai/features/reader/domain/bookmark.dart';
 import 'package:readme_ai/features/reader/domain/content_format.dart';
 import 'package:readme_ai/features/reader/domain/reader_repository.dart';
 import 'package:readme_ai/features/reader/domain/reading_progress.dart';
+import 'package:readme_ai/features/reader/domain/recent_read.dart';
 
 /// In-memory [ReaderRepository] for widget and unit tests.
 class FakeReaderRepository implements ReaderRepository {
@@ -10,9 +11,11 @@ class FakeReaderRepository implements ReaderRepository {
     BookContent? content,
     ReadingProgress? progress,
     List<Bookmark>? bookmarks,
+    List<RecentRead>? recent,
   }) : _content = content ?? textContent(),
        _progress = progress,
-       _bookmarks = [...?bookmarks];
+       _bookmarks = [...?bookmarks],
+       recent = [...?recent];
 
   final BookContent _content;
   ReadingProgress? _progress;
@@ -20,6 +23,13 @@ class FakeReaderRepository implements ReaderRepository {
 
   /// The most recently saved progress (for assertions).
   ReadingProgress? lastSaved;
+
+  /// Returned by [listRecent].
+  final List<RecentRead> recent;
+
+  int listRecentCalls = 0;
+
+  int getProgressCalls = 0;
 
   static BookContent textContent({
     String text =
@@ -44,7 +54,10 @@ class FakeReaderRepository implements ReaderRepository {
   Future<BookContent> getContent(String bookId) async => _content;
 
   @override
-  Future<ReadingProgress?> getProgress(String bookId) async => _progress;
+  Future<ReadingProgress?> getProgress(String bookId) async {
+    getProgressCalls++;
+    return _progress;
+  }
 
   @override
   Future<ReadingProgress> saveProgress(
@@ -62,6 +75,12 @@ class FakeReaderRepository implements ReaderRepository {
     _progress = progress;
     lastSaved = progress;
     return progress;
+  }
+
+  @override
+  Future<List<RecentRead>> listRecent() async {
+    listRecentCalls++;
+    return List.of(recent);
   }
 
   @override

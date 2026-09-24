@@ -12,8 +12,10 @@ import '../application/reader_providers.dart';
 import '../application/reader_settings_controller.dart';
 import '../domain/book_content.dart';
 import '../domain/bookmark.dart';
+import '../domain/chapter_mark.dart';
 import '../domain/content_format.dart';
 import 'widgets/bookmarks_sheet.dart';
+import 'widgets/contents_sheet.dart';
 import 'widgets/explainable_text.dart';
 import 'widgets/reader_settings_sheet.dart';
 
@@ -119,8 +121,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     });
   }
 
-  void _jumpToAnchor(String anchor) {
-    final offset = int.tryParse(anchor) ?? 0;
+  void _jumpToAnchor(String anchor) => _jumpToOffset(int.tryParse(anchor) ?? 0);
+
+  void _jumpToOffset(int offset) {
     if (_characterCount == 0 || !_scrollController.hasClients) return;
     final fraction = (offset / _characterCount).clamp(0.0, 1.0);
     _scrollController.animateTo(
@@ -162,6 +165,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
+  void _openContents(List<ChapterMark> chapters) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => ContentsSheet(
+        chapters: chapters,
+        currentOffset: _offsetFromFraction(_progress.value),
+        onSelect: (chapter) {
+          Navigator.of(sheetContext).pop();
+          _jumpToOffset(chapter.startOffset);
+        },
+      ),
+    );
+  }
+
   void _openSettings() {
     showModalBottomSheet<void>(
       context: context,
@@ -192,6 +211,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final l10n = AppLocalizations.of(context);
     final contentState = ref.watch(bookContentProvider(widget.bookId));
     final theme = Theme.of(context);
+    final chapters = contentState.value?.chapters ?? const <ChapterMark>[];
 
     // Sepia applies to the light theme only; dark mode has its own page.
     final sepia =
@@ -226,6 +246,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           ],
         ),
         actions: [
+          if (chapters.length > 1)
+            IconButton(
+              tooltip: l10n.contents,
+              icon: const Icon(Icons.toc_rounded),
+              onPressed: () => _openContents(chapters),
+            ),
           IconButton(
             tooltip: l10n.bookmarkThisPosition,
             icon: const Icon(Icons.bookmark_add_outlined),

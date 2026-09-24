@@ -8,9 +8,12 @@ import '../../../core/router/app_routes.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../auth/application/auth_controller.dart';
+import '../../reader/application/reader_providers.dart';
+import '../../reader/domain/recent_read.dart';
 import '../application/library_controller.dart';
 import '../domain/book.dart';
 import 'widgets/book_card.dart';
+import 'widgets/book_cover_art.dart';
 
 /// The user's responsive, API-backed reading library.
 class LibraryScreen extends ConsumerStatefulWidget {
@@ -32,6 +35,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final booksState = ref.watch(libraryControllerProvider);
+    // The shelf is a nicety: while loading or on error it is simply absent.
+    final recent =
+        ref.watch(recentReadingProvider).value ?? const <RecentRead>[];
 
     return Scaffold(
       appBar: AppBar(
@@ -71,11 +77,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
           AsyncData(:final value) => _LibraryBody(
             key: const ValueKey('library-data'),
             books: value,
+            recent: recent,
             query: _query,
             onQueryChanged: (value) => setState(() => _query = value),
-            onRefresh: () =>
-                ref.read(libraryControllerProvider.notifier).refresh(),
+            onRefresh: () {
+              ref.invalidate(recentReadingProvider);
+              return ref.read(libraryControllerProvider.notifier).refresh();
+            },
             onOpen: (book) => _openBook(context, book),
+            onContinue: (book) => context.goNamed(
+              AppRoutes.readerName,
+              pathParameters: {'bookId': book.id},
+            ),
             onUpload: () => _handleUpload(context),
           ),
           AsyncError() => _ErrorView(
@@ -145,7 +158,14 @@ class _LibraryBrand extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 11),
-        Text('ReadMe.ai', style: theme.textTheme.titleLarge),
+        Flexible(
+          child: Text(
+            'ReadMe.ai',
+            style: theme.textTheme.titleLarge,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
       ],
     );
   }
@@ -154,20 +174,37 @@ class _LibraryBrand extends StatelessWidget {
 class _LibraryBody extends StatelessWidget {
   const _LibraryBody({
     required this.books,
+    required this.recent,
     required this.query,
     required this.onQueryChanged,
     required this.onRefresh,
     required this.onOpen,
+    required this.onContinue,
     required this.onUpload,
     super.key,
   });
 
+  /// How many books the "Continue reading" shelf shows at most.
+  static const _shelfSize = 10;
+
   final List<Book> books;
+  final List<RecentRead> recent;
   final String query;
   final ValueChanged<String> onQueryChanged;
   final Future<void> Function() onRefresh;
   final void Function(Book) onOpen;
+  final void Function(Book) onContinue;
   final VoidCallback onUpload;
+
+  /// Unfinished books the user has opened, most recently read first.
+  List<(Book, RecentRead)> _shelf() {
+    final byId = {for (final book in books) book.id: book};
+    return [
+      for (final read in recent)
+        if (!read.isFinished && byId[read.bookId] != null)
+          (byId[read.bookId]!, read),
+    ].take(_shelfSize).toList();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -181,6 +218,7 @@ class _LibraryBody extends StatelessWidget {
                     book.originalFilename.toLowerCase().contains(normalized),
               )
               .toList();
+    final shelf = normalized.isEmpty ? _shelf() : const <(Book, RecentRead)>[];
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -194,7 +232,10 @@ class _LibraryBody extends StatelessWidget {
             : contentWidth >= 620
             ? 2
             : 1;
-        final ratio = columns == 1 ? 2.15 : 0.88;
+        // Single-column cards get a fixed height: a width-derived ratio made
+        // them too short for a two-line title on narrow phones.
+        const singleColumnHeight = 190.0;
+        const multiColumnRatio = 0.88;
 
         return RefreshIndicator(
           onRefresh: onRefresh,
@@ -215,6 +256,21 @@ class _LibraryBody extends StatelessWidget {
                   ),
                 ),
               ),
+              if (shelf.isNotEmpty)
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(horizontal, 26, horizontal, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Center(
+                      child: SizedBox(
+                        width: 1180,
+                        child: _ContinueReadingShelf(
+                          items: shelf,
+                          onOpen: onContinue,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               if (books.isEmpty)
                 SliverFillRemaining(
                   hasScrollBody: false,
@@ -235,7 +291,10 @@ class _LibraryBody extends StatelessWidget {
                           crossAxisCount: columns,
                           mainAxisSpacing: 18,
                           crossAxisSpacing: 18,
-                          childAspectRatio: ratio,
+                          childAspectRatio: multiColumnRatio,
+                          mainAxisExtent: columns == 1
+                              ? singleColumnHeight
+                              : null,
                         ),
                         delegate: SliverChildBuilderDelegate((context, index) {
                           final book = visibleBooks[index];
@@ -253,6 +312,118 @@ class _LibraryBody extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// A horizontal shelf of books the user is partway through.
+class _ContinueReadingShelf extends StatelessWidget {
+  const _ContinueReadingShelf({required this.items, required this.onOpen});
+
+  final List<(Book, RecentRead)> items;
+  final void Function(Book) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(l10n.continueReading, style: theme.textTheme.titleLarge),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 124,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: items.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 14),
+            itemBuilder: (context, index) {
+              final (book, read) = items[index];
+              return _ContinueReadingCard(
+                book: book,
+                read: read,
+                onTap: () => onOpen(book),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ContinueReadingCard extends StatelessWidget {
+  const _ContinueReadingCard({
+    required this.book,
+    required this.read,
+    required this.onTap,
+  });
+
+  final Book book;
+  final RecentRead read;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    final fraction = (read.progressPercentage / 100).clamp(0.0, 1.0);
+    return SizedBox(
+      width: 272,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    width: 66,
+                    height: 100,
+                    child: BookCoverArt(
+                      book: book,
+                      style: CoverStyle.thumbnail,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        book.title,
+                        style: theme.textTheme.titleMedium,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const Spacer(),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: fraction,
+                          minHeight: 5,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        l10n.percentRead((fraction * 100).round()),
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

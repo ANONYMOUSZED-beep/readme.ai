@@ -10,6 +10,7 @@ import '../application/library_controller.dart';
 import '../application/library_providers.dart';
 import '../domain/book.dart';
 import '../domain/book_status.dart';
+import 'widgets/book_cover_art.dart';
 
 /// Focused overview of a single book before entering the reader.
 class BookDetailScreen extends ConsumerWidget {
@@ -154,70 +155,23 @@ class _DetailCover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = _coverColors(book.title);
+    final shadow = coverColors(book.title).last;
     return Hero(
       tag: 'book-cover-${book.id}',
-      child: Container(
+      child: DecoratedBox(
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: colors,
-          ),
           borderRadius: BorderRadius.circular(26),
           boxShadow: [
             BoxShadow(
-              color: colors.last.withValues(alpha: 0.28),
+              color: shadow.withValues(alpha: 0.28),
               blurRadius: 32,
               offset: const Offset(0, 18),
             ),
           ],
         ),
-        child: Stack(
-          children: [
-            Positioned(
-              right: -54,
-              bottom: -50,
-              child: Container(
-                width: 210,
-                height: 210,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.12),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(28),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(
-                    Icons.auto_stories_rounded,
-                    size: 34,
-                    color: Colors.white,
-                  ),
-                  const Spacer(),
-                  Text(
-                    _initials(book.title),
-                    style: Theme.of(context).textTheme.displayLarge?.copyWith(
-                      color: Colors.white,
-                      fontSize: 68,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'README.AI EDITION',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Colors.white.withValues(alpha: 0.78),
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.8,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(26),
+          child: BookCoverArt(book: book, style: CoverStyle.hero),
         ),
       ),
     );
@@ -530,25 +484,4 @@ String _friendlyDate(DateTime date) {
     'Dec',
   ];
   return '${months[date.month - 1]} ${date.day}, ${date.year}';
-}
-
-String _initials(String title) {
-  final words = title
-      .trim()
-      .split(RegExp(r'\s+'))
-      .where((word) => word.isNotEmpty)
-      .take(2);
-  final value = words.map((word) => word[0].toUpperCase()).join();
-  return value.isEmpty ? 'R' : value;
-}
-
-List<Color> _coverColors(String title) {
-  const palettes = [
-    [Color(0xFF4D5FF7), Color(0xFF29369E)],
-    [Color(0xFFDF7A45), Color(0xFF8F3D42)],
-    [Color(0xFF237A68), Color(0xFF17483F)],
-    [Color(0xFF7655C6), Color(0xFF41307D)],
-    [Color(0xFF386C9B), Color(0xFF1D3C61)],
-  ];
-  return palettes[title.hashCode.abs() % palettes.length];
 }

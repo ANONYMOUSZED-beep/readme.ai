@@ -34,7 +34,8 @@ class LibraryController extends AsyncNotifier<List<Book>> {
     await _repository.reprocessBook(id);
     ref
       ..invalidate(bookProvider(id))
-      ..invalidate(processingReportProvider(id));
+      ..invalidate(processingReportProvider(id))
+      ..invalidate(bookCoverProvider(id));
     state = AsyncData(await _repository.listBooks());
   }
 

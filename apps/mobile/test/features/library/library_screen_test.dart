@@ -237,4 +237,29 @@ void main() {
     expect(find.text("We couldn't prepare this book"), findsNothing);
     expect(find.widgetWithText(FilledButton, 'Read'), findsOneWidget);
   });
+
+  testWidgets('the detail screen of a failed book fits a narrow phone', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final auth = FakeAuthRepository(initialUser: _signedIn);
+    addTearDown(auth.dispose);
+    final library = FakeLibraryRepository(
+      initial: [_book(status: BookStatus.failed)],
+    );
+    library.reports['b1'] = const ProcessingReport(
+      completed: false,
+      errorMessage:
+          'The PDF has no extractable text (it may be a scanned image).',
+    );
+
+    await pumpApp(tester, authRepository: auth, libraryRepository: library);
+    await tester.tap(find.byType(BookCard));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text("We couldn't prepare this book"), findsOneWidget);
+  });
 }

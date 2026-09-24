@@ -4,6 +4,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../shared/formatters/byte_formatter.dart';
 import '../../domain/book.dart';
 import '../../domain/book_status.dart';
+import 'book_cover_art.dart';
 
 /// Responsive editorial card for a book in the user's library.
 class BookCard extends StatelessWidget {
@@ -110,15 +111,21 @@ class _HorizontalBook extends StatelessWidget {
               children: [
                 _StatusBadge(status: book.status),
                 const SizedBox(height: 14),
-                Text(
-                  book.title,
-                  style: theme.textTheme.titleLarge,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                // Flexible: with large system text the title gives way
+                // (ellipsis) instead of overflowing the card.
+                Flexible(
+                  child: Text(
+                    book.title,
+                    style: theme.textTheme.titleLarge,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   '${_fileKind(book)}  ·  ${formatBytes(book.fileSize)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                     fontWeight: FontWeight.w600,
@@ -148,70 +155,11 @@ class _BookCover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = _coverColors(book.title);
     return Hero(
       tag: 'book-cover-${book.id}',
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: colors,
-          ),
-        ),
-        child: Stack(
-          children: [
-            Positioned(
-              right: compact ? -34 : -24,
-              bottom: compact ? -28 : -34,
-              child: Container(
-                width: compact ? 96 : 150,
-                height: compact ? 96 : 150,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.15),
-                ),
-              ),
-            ),
-            Positioned(
-              left: compact ? 14 : 22,
-              top: compact ? 16 : 22,
-              right: compact ? 12 : 22,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.auto_stories_rounded,
-                    color: Colors.white.withValues(alpha: 0.94),
-                    size: compact ? 24 : 30,
-                  ),
-                  if (!compact) ...[
-                    const SizedBox(height: 30),
-                    Text(
-                      _initials(book.title),
-                      style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                        color: Colors.white,
-                        fontSize: 40,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            Positioned(
-              left: compact ? 14 : 22,
-              bottom: compact ? 14 : 20,
-              child: Text(
-                'README.AI',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Colors.white.withValues(alpha: 0.8),
-                  letterSpacing: 1.5,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          ],
-        ),
+      child: BookCoverArt(
+        book: book,
+        style: compact ? CoverStyle.compact : CoverStyle.card,
       ),
     );
   }
@@ -264,11 +212,15 @@ class _StatusBadge extends StatelessWidget {
           children: [
             Icon(icon, size: 14, color: foreground),
             const SizedBox(width: 5),
-            Text(
-              status.label,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: foreground,
-                fontWeight: FontWeight.w800,
+            Flexible(
+              child: Text(
+                status.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: foreground,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
           ],
@@ -282,25 +234,4 @@ String _fileKind(Book book) {
   final dot = book.originalFilename.lastIndexOf('.');
   if (dot == -1) return 'DOCUMENT';
   return book.originalFilename.substring(dot + 1).toUpperCase();
-}
-
-String _initials(String title) {
-  final words = title
-      .trim()
-      .split(RegExp(r'\s+'))
-      .where((word) => word.isNotEmpty)
-      .take(2);
-  final result = words.map((word) => word[0].toUpperCase()).join();
-  return result.isEmpty ? 'R' : result;
-}
-
-List<Color> _coverColors(String title) {
-  const palettes = [
-    [Color(0xFF4D5FF7), Color(0xFF29369E)],
-    [Color(0xFFDF7A45), Color(0xFF8F3D42)],
-    [Color(0xFF237A68), Color(0xFF17483F)],
-    [Color(0xFF7655C6), Color(0xFF41307D)],
-    [Color(0xFF386C9B), Color(0xFF1D3C61)],
-  ];
-  return palettes[title.hashCode.abs() % palettes.length];
 }

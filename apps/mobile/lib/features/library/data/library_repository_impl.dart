@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import '../../../core/files/picked_book.dart';
@@ -66,6 +68,23 @@ class LibraryRepositoryImpl implements LibraryRepository {
       return _toReport(response.data!);
     } on DioException catch (error) {
       // 404 here means "never processed", not a missing book.
+      if (error.response?.statusCode == 404) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
+  @override
+  Future<Uint8List?> getCover(String id) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '$_basePath/$id/cover',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final data = response.data;
+      return data == null ? null : Uint8List.fromList(data);
+    } on DioException catch (error) {
       if (error.response?.statusCode == 404) {
         return null;
       }

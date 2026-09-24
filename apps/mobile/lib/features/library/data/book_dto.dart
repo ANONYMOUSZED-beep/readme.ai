@@ -18,6 +18,7 @@ class BookDto {
     required this.uploadedAt,
     this.totalPages,
     this.coverImageUrl,
+    this.hasCover = false,
   });
 
   factory BookDto.fromJson(Map<String, dynamic> json) =>
@@ -38,6 +39,8 @@ class BookDto {
   final int? totalPages;
   @JsonKey(name: 'cover_image_url')
   final String? coverImageUrl;
+  @JsonKey(name: 'has_cover', defaultValue: false)
+  final bool hasCover;
 
   /// Map to the domain [Book].
   Book toDomain() => Book(
@@ -50,5 +53,6 @@ class BookDto {
     uploadedAt: uploadedAt,
     totalPages: totalPages,
     coverImageUrl: coverImageUrl,
+    hasCover: hasCover,
   );
 }

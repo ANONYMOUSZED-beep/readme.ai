@@ -6,9 +6,12 @@ import 'package:readme_ai/features/auth/application/auth_providers.dart';
 import 'package:readme_ai/features/auth/domain/auth_repository.dart';
 import 'package:readme_ai/features/library/application/library_providers.dart';
 import 'package:readme_ai/features/library/domain/library_repository.dart';
+import 'package:readme_ai/features/reader/application/reader_providers.dart';
+import 'package:readme_ai/features/reader/domain/reader_repository.dart';
 
 import 'fake_file_picker.dart';
 import 'fake_library_repository.dart';
+import 'fake_reader_repository.dart';
 
 /// Pump the full app with fakes injected for all external dependencies, so no
 /// platform services (Firebase, HTTP, native file picker) are touched.
@@ -20,6 +23,7 @@ Future<void> pumpApp(
   required AuthRepository authRepository,
   LibraryRepository? libraryRepository,
   FilePickerService? filePicker,
+  ReaderRepository? readerRepository,
   bool settle = true,
 }) async {
   await tester.pumpWidget(
@@ -30,6 +34,9 @@ Future<void> pumpApp(
           libraryRepository ?? FakeLibraryRepository(),
         ),
         filePickerProvider.overrideWithValue(filePicker ?? FakeFilePicker()),
+        readerRepositoryProvider.overrideWithValue(
+          readerRepository ?? FakeReaderRepository(),
+        ),
       ],
       child: const ReadMeApp(),
     ),

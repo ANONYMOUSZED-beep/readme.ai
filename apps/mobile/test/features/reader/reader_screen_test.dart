@@ -1,10 +1,16 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:readme_ai/core/theme/theme_mode_controller.dart';
 import 'package:readme_ai/features/reader/application/reader_settings_controller.dart';
+import 'package:readme_ai/features/reader/domain/book_content.dart';
+import 'package:readme_ai/features/reader/domain/chapter_mark.dart';
+import 'package:readme_ai/features/reader/domain/content_format.dart';
 import 'package:readme_ai/features/reader/domain/reading_progress.dart';
+import 'package:readme_ai/features/reader/presentation/reader_screen.dart';
+import 'package:readme_ai/l10n/generated/app_localizations.dart';
 
 import '../../helpers/fake_reader_repository.dart';
 import '../../helpers/pump_reader.dart';
@@ -111,6 +117,93 @@ void main() {
     expect(repository.lastSaved, isNull);
     repository.release.complete();
   });
+  testWidgets('contents lists chapters and jumps to the chosen one', (
+    tester,
+  ) async {
+    await pumpReader(
+      tester,
+      repository: FakeReaderRepository(content: _chaptered()),
+    );
+
+    await tester.tap(find.byTooltip('Contents'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Beginnings'), findsOneWidget);
+    expect(find.text('Chapter 2'), findsOneWidget);
+    await tester.tap(find.text('Endings'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Beginnings'), findsNothing); // sheet closed
+    final position = tester
+        .state<ScrollableState>(find.byType(Scrollable).first)
+        .position;
+    expect(position.pixels, greaterThan(position.maxScrollExtent * 0.5));
+  });
+
+  testWidgets('a book with a single chapter has no contents button', (
+    tester,
+  ) async {
+    await pumpReader(tester, repository: FakeReaderRepository());
+
+    expect(find.byTooltip('Contents'), findsNothing);
+  });
+
+  testWidgets('reopening a book fetches its latest saved position', (
+    tester,
+  ) async {
+    final repository = FakeReaderRepository();
+    final container = await pumpReader(tester, repository: repository);
+    expect(repository.getProgressCalls, 1);
+
+    // Leave the reader (the app's provider scope stays mounted) and return.
+    Widget app(Widget home) => UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: home,
+      ),
+    );
+    await tester.pumpWidget(app(const SizedBox.shrink()));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(app(const ReaderScreen(bookId: 'b1')));
+    await tester.pumpAndSettle();
+
+    expect(repository.getProgressCalls, 2);
+  });
+
+  testWidgets('the reader toolbar fits a narrow phone', (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await pumpReader(
+      tester,
+      repository: FakeReaderRepository(content: _chaptered()),
+    );
+
+    expect(tester.takeException(), isNull);
+    expect(find.byTooltip('Contents'), findsOneWidget);
+  });
+}
+
+BookContent _chaptered() {
+  final one = List.filled(40, 'The first chapter goes on.').join('\n\n');
+  final two = List.filled(40, 'The second one continues.').join('\n\n');
+  final three = List.filled(40, 'And the third ends it.').join('\n\n');
+  final text = '$one\n\n$two\n\n$three';
+  return BookContent(
+    bookId: 'b1',
+    title: 'Chaptered',
+    format: ContentFormat.text,
+    characterCount: text.length,
+    text: text,
+    chapters: [
+      const ChapterMark(startOffset: 0, title: 'Beginnings'),
+      ChapterMark(startOffset: one.length + 2),
+      ChapterMark(startOffset: one.length + two.length + 4, title: 'Endings'),
+    ],
+  );
 }
 
 final _longText = List.filled(

@@ -52,6 +52,28 @@
   "@uploadingBook": {
     "description": "Label of the upload action while a book is being uploaded and prepared."
   },
+  "continueReading": "Continue reading",
+  "@continueReading": {
+    "description": "Heading of the library shelf of books the user is partway through."
+  },
+  "percentRead": "{percent}% read",
+  "@percentRead": {
+    "description": "How far through a book the user is.",
+    "placeholders": {
+      "percent": { "type": "int" }
+    }
+  },
+  "contents": "Contents",
+  "@contents": {
+    "description": "Title/tooltip for a book's table of contents."
+  },
+  "chapterNumber": "Chapter {number}",
+  "@chapterNumber": {
+    "description": "Name for a chapter that has no title of its own.",
+    "placeholders": {
+      "number": { "type": "int" }
+    }
+  },
   "retry": "Retry",
   "@retry": {
     "description": "Label for retry actions."

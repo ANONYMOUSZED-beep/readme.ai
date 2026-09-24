@@ -1,9 +1,12 @@
 # ReadMe.ai — Mobile (Flutter client)
 
 The Flutter reading client for ReadMe.ai: a personal library (PDF, EPUB,
-Markdown, and text uploads), a distraction-free reflowable reader with
-adjustable typography, light/dark mode, automatic resume, and bookmarks, and
-contextual AI explanations of any selected word, sentence, or passage.
+Markdown, and text uploads) with EPUB cover art and a *Continue reading*
+shelf; a distraction-free reflowable reader with serif/sans typography,
+Light/Sepia/Dark pages, a chapter contents sheet, automatic resume, and
+bookmarks; and contextual AI explanations of any selected word, sentence, or
+passage. Theme and reading preferences persist across launches
+(`shared_preferences`, behind `core/storage/PreferencesStore`).
 
 ## Running locally without Firebase
 

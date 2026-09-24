@@ -15,19 +15,21 @@ class ReaderController {
 
   ReaderRepository get _repository => _ref.read(readerRepositoryProvider);
 
-  /// Persist the current reading position for [bookId].
+  /// Persist the current reading position for [bookId], then refresh the
+  /// "Continue reading" shelf.
   Future<void> saveProgress(
     String bookId, {
     required String currentPosition,
     required double progressPercentage,
     required int readingTimeSeconds,
-  }) {
-    return _repository.saveProgress(
+  }) async {
+    await _repository.saveProgress(
       bookId,
       currentPosition: currentPosition,
       progressPercentage: progressPercentage,
       readingTimeSeconds: readingTimeSeconds,
     );
+    _ref.invalidate(recentReadingProvider);
   }
 
   /// Create a bookmark and refresh the bookmark list.
