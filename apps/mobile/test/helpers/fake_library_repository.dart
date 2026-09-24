@@ -4,6 +4,7 @@ import 'package:readme_ai/core/files/picked_book.dart';
 import 'package:readme_ai/features/library/domain/book.dart';
 import 'package:readme_ai/features/library/domain/book_status.dart';
 import 'package:readme_ai/features/library/domain/library_repository.dart';
+import 'package:readme_ai/features/library/domain/processing_report.dart';
 
 /// In-memory [LibraryRepository] for widget and unit tests.
 class FakeLibraryRepository implements LibraryRepository {
@@ -19,6 +20,17 @@ class FakeLibraryRepository implements LibraryRepository {
 
   /// When set, [listBooks] awaits this before returning (to test loading).
   Completer<void>? releaseList;
+
+  /// When set, [uploadBook] awaits this before returning (to test progress).
+  Completer<void>? releaseUpload;
+
+  /// Processing outcomes returned by [getProcessingReport], by book id.
+  final Map<String, ProcessingReport> reports = {};
+
+  /// When set, [reprocessBook] throws this.
+  Object? reprocessError;
+
+  int reprocessCalls = 0;
 
   int listCalls = 0;
 
@@ -40,6 +52,9 @@ class FakeLibraryRepository implements LibraryRepository {
 
   @override
   Future<Book> uploadBook(PickedBook file) async {
+    if (releaseUpload != null) {
+      await releaseUpload!.future;
+    }
     if (uploadError != null) {
       throw uploadError!;
     }
@@ -59,5 +74,22 @@ class FakeLibraryRepository implements LibraryRepository {
   @override
   Future<void> deleteBook(String id) async {
     _books.removeWhere((book) => book.id == id);
+  }
+
+  @override
+  Future<ProcessingReport?> getProcessingReport(String id) async => reports[id];
+
+  /// Succeeds by marking the book ready, unless [reprocessError] is set.
+  @override
+  Future<ProcessingReport> reprocessBook(String id) async {
+    reprocessCalls++;
+    if (reprocessError != null) {
+      throw reprocessError!;
+    }
+    final index = _books.indexWhere((book) => book.id == id);
+    _books[index] = _books[index].copyWith(status: BookStatus.ready);
+    const report = ProcessingReport(completed: true);
+    reports[id] = report;
+    return report;
   }
 }

@@ -8,6 +8,10 @@ import 'explanation_dto.dart';
 class ExplanationRepositoryImpl implements ExplanationRepository {
   const ExplanationRepositoryImpl(this._dio);
 
+  /// The backend waits on a language model (30s by default, longer on slow
+  /// hardware); the global 15s receive timeout would give up first.
+  static const _receiveTimeout = Duration(seconds: 90);
+
   final Dio _dio;
 
   @override
@@ -24,6 +28,7 @@ class ExplanationRepositoryImpl implements ExplanationRepository {
         'end_anchor': endAnchor,
         'selected_text': selectedText,
       },
+      options: Options(receiveTimeout: _receiveTimeout),
     );
     return ExplanationDto.fromJson(response.data!).toDomain();
   }

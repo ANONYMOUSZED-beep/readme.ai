@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/files/file_picker_service.dart';
+import '../../../core/network/dio_error_mapper.dart';
 import '../../../core/router/app_routes.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../l10n/generated/app_localizations.dart';
@@ -21,6 +22,11 @@ class LibraryScreen extends ConsumerStatefulWidget {
 
 class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   String _query = '';
+
+  /// True while a book is uploading (and being prepared server-side), which
+  /// can take a while for large books; it drives the button's busy state and
+  /// prevents a second, duplicate upload.
+  bool _uploading = false;
 
   @override
   Widget build(BuildContext context) {
@@ -45,9 +51,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _handleUpload(context),
-        icon: const Icon(Icons.add_rounded),
-        label: Text(l10n.uploadBook),
+        onPressed: _uploading ? null : () => _handleUpload(context),
+        icon: _uploading
+            ? SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.4,
+                  color: Theme.of(context).colorScheme.onPrimary,
+                ),
+              )
+            : const Icon(Icons.add_rounded),
+        label: Text(_uploading ? l10n.uploadingBook : l10n.uploadBook),
       ),
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 280),
@@ -83,16 +98,26 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   }
 
   Future<void> _handleUpload(BuildContext context) async {
+    if (_uploading) return;
     final l10n = AppLocalizations.of(context);
     final messenger = ScaffoldMessenger.of(context);
     final picked = await ref.read(filePickerProvider).pickBook();
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
+    setState(() => _uploading = true);
     try {
       await ref.read(libraryControllerProvider.notifier).uploadBook(picked);
-    } on Object {
+    } on Object catch (error) {
       messenger
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(l10n.uploadFailed)));
+        ..showSnackBar(
+          SnackBar(
+            content: Text(describeError(error, fallback: l10n.uploadFailed)),
+          ),
+        );
+    } finally {
+      if (mounted) {
+        setState(() => _uploading = false);
+      }
     }
   }
 }
@@ -332,7 +357,7 @@ class _EmptyView extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Drop in a text or PDF file and make it easier to understand.',
+                'Add a PDF, EPUB, or text file and make it easier to understand.',
                 style: theme.textTheme.bodyLarge?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),

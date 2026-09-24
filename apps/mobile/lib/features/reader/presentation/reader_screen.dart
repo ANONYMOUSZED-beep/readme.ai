@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/logging/app_logger.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../explanation/presentation/explanation_sheet.dart';
@@ -29,21 +30,45 @@ class ReaderScreen extends ConsumerStatefulWidget {
 class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   final ScrollController _scrollController = ScrollController();
   final Stopwatch _sessionStopwatch = Stopwatch()..start();
+
+  /// Reading progress as a 0..1 fraction. A notifier (not widget state) so
+  /// scrolling repaints only the progress indicators, never the book text.
+  final ValueNotifier<double> _progress = ValueNotifier<double>(0);
+
+  // Captured up front: `ref` must not be used once the widget is disposing,
+  // which is exactly when the final position needs saving.
+  late final ReaderController _readerController;
+  late final AppLogger _logger;
+
   Timer? _saveDebounce;
   bool _restored = false;
-  double _progress = 0;
+
+  /// Whether the position changed since it was last saved. Guards against
+  /// overwriting a saved position with 0% when the reader is closed before
+  /// the saved position has even been restored.
+  bool _unsaved = false;
   int _characterCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _readerController = ref.read(readerControllerProvider);
+    _logger = ref.read(loggerProvider);
+  }
 
   @override
   void dispose() {
     _saveDebounce?.cancel();
+    // The scroll view is already detached here, so the last observed
+    // position is saved rather than read from the controller.
     _persistPosition();
+    _progress.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
   double get _scrollFraction {
-    if (!_scrollController.hasClients) return 0;
+    if (!_scrollController.hasClients) return _progress.value;
     final max = _scrollController.position.maxScrollExtent;
     if (max <= 0) return 0;
     return (_scrollController.offset / max).clamp(0.0, 1.0);
@@ -53,28 +78,32 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       (fraction * _characterCount).round();
 
   void _onScroll() {
-    final fraction = _scrollFraction;
-    setState(() => _progress = fraction);
+    _progress.value = _scrollFraction;
+    _unsaved = true;
     _saveDebounce?.cancel();
     _saveDebounce = Timer(const Duration(milliseconds: 1200), _persistPosition);
   }
 
   void _persistPosition() {
-    if (!_scrollController.hasClients || _characterCount == 0) return;
-    final fraction = _scrollFraction;
+    if (!_unsaved || _characterCount == 0) return;
+    _unsaved = false;
+    final fraction = _progress.value;
     final seconds = _sessionStopwatch.elapsed.inSeconds;
     _sessionStopwatch
       ..reset()
       ..start();
     unawaited(
-      ref
-          .read(readerControllerProvider)
+      _readerController
           .saveProgress(
             widget.bookId,
             currentPosition: _offsetFromFraction(fraction).toString(),
             progressPercentage: fraction * 100,
             readingTimeSeconds: seconds,
-          ),
+          )
+          .catchError((Object error) {
+            // Best effort: the next save (or next session) catches up.
+            _logger.warning('Could not save reading progress: $error');
+          }),
     );
   }
 
@@ -86,7 +115,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final max = _scrollController.position.maxScrollExtent;
       final target = (percentage / 100).clamp(0.0, 1.0) * max;
       _scrollController.jumpTo(target);
-      setState(() => _progress = percentage / 100);
+      _progress.value = percentage / 100;
     });
   }
 
@@ -174,11 +203,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
-            Text(
-              '${(_progress * 100).round()}% complete',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
+            ValueListenableBuilder<double>(
+              valueListenable: _progress,
+              builder: (context, progress, _) => Text(
+                '${(progress * 100).round()}% complete',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ],
@@ -205,11 +237,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(3),
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(begin: 0, end: _progress.clamp(0.0, 1.0)),
-            duration: const Duration(milliseconds: 180),
-            builder: (context, value, _) =>
-                LinearProgressIndicator(minHeight: 3, value: value),
+          child: ValueListenableBuilder<double>(
+            valueListenable: _progress,
+            builder: (context, progress, _) => TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: progress.clamp(0.0, 1.0)),
+              duration: const Duration(milliseconds: 180),
+              builder: (context, value, _) =>
+                  LinearProgressIndicator(minHeight: 3, value: value),
+            ),
           ),
         ),
       ),
@@ -232,6 +267,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       return _UnsupportedView(
         key: const ValueKey('unsupported-reader'),
         message: l10n.readerUnsupportedFormat,
+        detail: l10n.readerUnsupportedDetail,
       );
     }
 
@@ -350,9 +386,14 @@ class _AiReadingHint extends StatelessWidget {
 }
 
 class _UnsupportedView extends StatelessWidget {
-  const _UnsupportedView({required this.message, super.key});
+  const _UnsupportedView({
+    required this.message,
+    required this.detail,
+    super.key,
+  });
 
   final String message;
+  final String detail;
 
   @override
   Widget build(BuildContext context) {
@@ -379,7 +420,7 @@ class _UnsupportedView extends StatelessWidget {
                   borderRadius: BorderRadius.circular(21),
                 ),
                 child: Icon(
-                  Icons.picture_as_pdf_outlined,
+                  Icons.menu_book_outlined,
                   size: 31,
                   color: theme.colorScheme.secondary,
                 ),
@@ -392,7 +433,7 @@ class _UnsupportedView extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Text files are fully supported today. PDF reading is coming next.',
+                detail,
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),

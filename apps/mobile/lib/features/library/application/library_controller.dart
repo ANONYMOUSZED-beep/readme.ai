@@ -28,6 +28,16 @@ class LibraryController extends AsyncNotifier<List<Book>> {
     state = AsyncData(await _repository.listBooks());
   }
 
+  /// Re-run processing for a book, then refresh everything that shows its
+  /// status. Rethrows on failure.
+  Future<void> reprocessBook(String id) async {
+    await _repository.reprocessBook(id);
+    ref
+      ..invalidate(bookProvider(id))
+      ..invalidate(processingReportProvider(id));
+    state = AsyncData(await _repository.listBooks());
+  }
+
   /// Delete a book and remove it from the list. Rethrows on failure.
   Future<void> deleteBook(String id) async {
     await _repository.deleteBook(id);

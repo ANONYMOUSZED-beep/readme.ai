@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/network/dio_error_mapper.dart';
 import '../../../core/router/app_routes.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/formatters/byte_formatter.dart';
 import '../application/library_controller.dart';
 import '../application/library_providers.dart';
 import '../domain/book.dart';
+import '../domain/book_status.dart';
 
 /// Focused overview of a single book before entering the reader.
 class BookDetailScreen extends ConsumerWidget {
@@ -260,15 +262,20 @@ class _BookInformation extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 28),
-        FilledButton.icon(
-          onPressed: () => context.goNamed(
-            AppRoutes.readerName,
-            pathParameters: {'bookId': book.id},
+        if (book.status == BookStatus.failed)
+          _ProcessingFailedCard(bookId: book.id)
+        else
+          FilledButton.icon(
+            onPressed: () => context.goNamed(
+              AppRoutes.readerName,
+              pathParameters: {'bookId': book.id},
+            ),
+            icon: const Icon(Icons.chrome_reader_mode_outlined),
+            label: Text(l10n.readBook),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(56),
+            ),
           ),
-          icon: const Icon(Icons.chrome_reader_mode_outlined),
-          label: Text(l10n.readBook),
-          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
-        ),
         const SizedBox(height: 30),
         Text('About this file', style: theme.textTheme.titleLarge),
         const SizedBox(height: 14),
@@ -307,6 +314,104 @@ class _BookInformation extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Explains why a book could not be prepared and lets the reader retry.
+class _ProcessingFailedCard extends ConsumerStatefulWidget {
+  const _ProcessingFailedCard({required this.bookId});
+
+  final String bookId;
+
+  @override
+  ConsumerState<_ProcessingFailedCard> createState() =>
+      _ProcessingFailedCardState();
+}
+
+class _ProcessingFailedCardState extends ConsumerState<_ProcessingFailedCard> {
+  bool _retrying = false;
+
+  Future<void> _retry() async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _retrying = true);
+    try {
+      await ref
+          .read(libraryControllerProvider.notifier)
+          .reprocessBook(widget.bookId);
+    } on Object catch (error) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              describeError(error, fallback: l10n.retryProcessingFailed),
+            ),
+          ),
+        );
+    } finally {
+      if (mounted) {
+        setState(() => _retrying = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    final reason = ref
+        .watch(processingReportProvider(widget.bookId))
+        .value
+        ?.errorMessage;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.errorContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.error_outline_rounded, color: theme.colorScheme.error),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  l10n.processingFailedTitle,
+                  style: theme.textTheme.titleMedium,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            reason ?? l10n.processingFailedFallback,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            onPressed: _retrying ? null : _retry,
+            icon: _retrying
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh_rounded),
+            label: Text(l10n.retryProcessing),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(52),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

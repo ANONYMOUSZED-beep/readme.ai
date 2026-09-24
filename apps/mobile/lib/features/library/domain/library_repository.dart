@@ -1,5 +1,6 @@
 import '../../../core/files/picked_book.dart';
 import 'book.dart';
+import 'processing_report.dart';
 
 /// Contract for the user's book library.
 ///
@@ -18,4 +19,11 @@ abstract interface class LibraryRepository {
 
   /// Delete a book by id.
   Future<void> deleteBook(String id);
+
+  /// The latest processing outcome for a book, or `null` if it was never
+  /// processed.
+  Future<ProcessingReport?> getProcessingReport(String id);
+
+  /// Re-run processing for a book (e.g. after a failure).
+  Future<ProcessingReport> reprocessBook(String id);
 }
