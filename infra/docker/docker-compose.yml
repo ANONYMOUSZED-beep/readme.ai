@@ -1,13 +1,19 @@
 # ===========================================================================
 # ReadMe.ai — local development stack.
 #
-# Run from the repository root:
+# Run from the repository root (after `cp .env.example .env`):
 #     docker compose -f infra/docker/docker-compose.yml up --build
 #
 # Services:
-#   api       FastAPI backend (foundation: health/version only)
-#   postgres  System of record
-#   qdrant    Vector database (provisioned now; used in a later sprint)
+#   api          FastAPI backend (applies database migrations on start)
+#   postgres     System of record
+#   qdrant       Vector database (provisioned now; used in a later sprint)
+#   ollama       Local LLM server that powers explanations
+#   ollama-pull  One-shot job that downloads OLLAMA_MODEL into ollama
+#
+# The first `up` downloads the language model (a few GB). Explanations return
+# a 503 until it finishes; everything else works immediately. To run without
+# the LLM:  docker compose -f infra/docker/docker-compose.yml up --build api
 # ===========================================================================
 
 name: readme-ai
@@ -25,8 +31,14 @@ services:
       # Container-network hostnames override any localhost defaults from .env.
       POSTGRES_HOST: postgres
       QDRANT_HOST: qdrant
+      OLLAMA_BASE_URL: http://ollama:11434
+      # Single instance: safe to apply migrations on start-up.
+      RUN_MIGRATIONS: "true"
     ports:
       - "${SERVER_PORT:-8000}:8000"
+    volumes:
+      # Uploaded books (STORAGE_LOCAL_PATH=var/storage inside /app).
+      - api_storage:/app/var/storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,13 +64,38 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.19.1
     ports:
       - "${QDRANT_PORT:-6333}:6333"
     volumes:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
 
+  ollama:
+    image: ollama/ollama:0.34.4
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  ollama-pull:
+    image: ollama/ollama:0.34.4
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-llama3.2}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
+  api_storage:
   postgres_data:
   qdrant_data:
+  ollama_models:
