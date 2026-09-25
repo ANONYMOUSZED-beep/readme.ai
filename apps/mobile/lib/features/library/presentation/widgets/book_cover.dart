@@ -1,18 +1,23 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../application/library_providers.dart';
 import '../../domain/book.dart';
 
-/// A generated, typeset book cover for books without artwork.
+/// A book's cover: the file's own artwork when it has one (e.g. EPUB covers),
+/// otherwise a generated, typeset cover.
 ///
-/// The palette and motif are derived deterministically from the title, so a
-/// book keeps the same cover everywhere it appears. Sizes itself from its
+/// The generated palette and motif are derived deterministically from the
+/// title, so a book keeps the same cover everywhere it appears; it also shows
+/// while real artwork loads or if that image is damaged, so a cover is never
+/// blank. Sizes itself from its
 /// width; give it a 2:3 box (see [BookCover.aspectRatio]). The cover is
 /// decorative and hidden from screen readers, so always show the title
 /// alongside it.
-class BookCover extends StatelessWidget {
+class BookCover extends ConsumerWidget {
   const BookCover({
     required this.book,
     this.heroTag,
@@ -32,7 +37,10 @@ class BookCover extends StatelessWidget {
   final bool elevated;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final artwork = book.hasCover
+        ? ref.watch(bookCoverProvider(book.id)).value
+        : null;
     final cover = LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
@@ -65,7 +73,22 @@ class BookCover extends StatelessWidget {
           child: ClipRRect(
             borderRadius: borderRadius,
             child: ExcludeSemantics(
-              child: _CoverArt(book: book, style: style, width: width),
+              child: artwork == null
+                  ? _CoverArt(book: book, style: style, width: width)
+                  : Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        _CoverArt(book: book, style: style, width: width),
+                        Image.memory(
+                          artwork,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                          // A damaged image leaves the generated cover showing.
+                          errorBuilder: (context, error, stackTrace) =>
+                              const SizedBox.shrink(),
+                        ),
+                      ],
+                    ),
             ),
           ),
         );

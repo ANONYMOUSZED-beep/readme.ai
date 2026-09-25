@@ -48,6 +48,32 @@
   "@uploadFailed": {
     "description": "Shown when a book upload fails."
   },
+  "uploadingBook": "Uploading…",
+  "@uploadingBook": {
+    "description": "Label of the upload action while a book is being uploaded and prepared."
+  },
+  "continueReading": "Continue reading",
+  "@continueReading": {
+    "description": "Heading of the library shelf of books the user is partway through."
+  },
+  "percentRead": "{percent}% read",
+  "@percentRead": {
+    "description": "How far through a book the user is.",
+    "placeholders": {
+      "percent": { "type": "int" }
+    }
+  },
+  "contents": "Contents",
+  "@contents": {
+    "description": "Title/tooltip for a book's table of contents."
+  },
+  "chapterNumber": "Chapter {number}",
+  "@chapterNumber": {
+    "description": "Name for a chapter that has no title of its own.",
+    "placeholders": {
+      "number": { "type": "int" }
+    }
+  },
   "retry": "Retry",
   "@retry": {
     "description": "Label for retry actions."
@@ -103,6 +129,22 @@
   "@readBook": {
     "description": "Label for the action that opens the reader."
   },
+  "processingFailedTitle": "We couldn't prepare this book",
+  "@processingFailedTitle": {
+    "description": "Headline on the book detail screen when processing failed."
+  },
+  "processingFailedFallback": "Something went wrong while preparing it for reading.",
+  "@processingFailedFallback": {
+    "description": "Shown when the reason a book failed to process is unknown."
+  },
+  "retryProcessing": "Try again",
+  "@retryProcessing": {
+    "description": "Action that re-runs processing for a book that failed."
+  },
+  "retryProcessingFailed": "Couldn't prepare the book. Please try again later.",
+  "@retryProcessingFailed": {
+    "description": "Shown when re-running processing fails."
+  },
   "bookmarks": "Bookmarks",
   "@bookmarks": {
     "description": "Title/label for the bookmarks list."
@@ -119,9 +161,13 @@
   "@readerSettings": {
     "description": "Tooltip for opening the reader settings sheet."
   },
-  "readerUnsupportedFormat": "Preview isn't available for this file format yet.",
+  "readerUnsupportedFormat": "This book isn't ready to read.",
   "@readerUnsupportedFormat": {
-    "description": "Shown when a book's format cannot be rendered yet (e.g. PDF)."
+    "description": "Headline shown in the reader when a book has no readable text (processing failed or has not finished)."
+  },
+  "readerUnsupportedDetail": "Scanned and password-protected files can't be read yet. Open the book's details to see why, or try processing it again.",
+  "@readerUnsupportedDetail": {
+    "description": "Supporting text beneath the reader's not-ready headline."
   },
   "explanationMeaning": "Meaning",
   "@explanationMeaning": {
@@ -131,9 +177,9 @@
   "@explanationExample": {
     "description": "Label for the contextual example in the explanation sheet."
   },
-  "explanationError": "Couldn't explain that word. Please try again.",
+  "explanationError": "Couldn't explain that selection. Please try again.",
   "@explanationError": {
-    "description": "Shown when a word explanation fails to load."
+    "description": "Shown when an explanation fails to load."
   },
   "close": "Close",
   "@close": {

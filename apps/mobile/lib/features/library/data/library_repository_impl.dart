@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import '../../../core/files/picked_book.dart';
@@ -14,6 +16,11 @@ class LibraryRepositoryImpl implements LibraryRepository {
   const LibraryRepositoryImpl(this._dio);
 
   static const _basePath = '/api/v1/books';
+
+  /// Uploads can be large and the server processes the book (PDF/EPUB parsing)
+  /// before responding, so they get far more time than the 15s default.
+  static const _uploadSendTimeout = Duration(minutes: 2);
+  static const _uploadReceiveTimeout = Duration(minutes: 3);
 
   final Dio _dio;
 
@@ -52,6 +59,10 @@ class LibraryRepositoryImpl implements LibraryRepository {
           : (sent, total) {
               if (total > 0) onProgress((sent / total).clamp(0.0, 1.0));
             },
+      options: Options(
+        sendTimeout: _uploadSendTimeout,
+        receiveTimeout: _uploadReceiveTimeout,
+      ),
     );
     return BookDto.fromJson(response.data!).toDomain();
   }
@@ -77,11 +88,32 @@ class LibraryRepositoryImpl implements LibraryRepository {
 
   @override
   Future<void> retryProcessing(String id) async {
-    await _dio.post<void>('$_basePath/$id/processing');
+    // Re-processing runs within this request, so allow as long as an upload.
+    await _dio.post<void>(
+      '$_basePath/$id/processing',
+      options: Options(receiveTimeout: _uploadReceiveTimeout),
+    );
   }
 
   @override
   Future<void> deleteBook(String id) async {
     await _dio.delete<void>('$_basePath/$id');
+  }
+
+  @override
+  Future<Uint8List?> getCover(String id) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '$_basePath/$id/cover',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final data = response.data;
+      return data == null ? null : Uint8List.fromList(data);
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 404) {
+        return null;
+      }
+      rethrow;
+    }
   }
 }

@@ -1,8 +1,27 @@
 # ReadMe.ai — Mobile (Flutter client)
 
-The Flutter reading client for ReadMe.ai. **Sprint 3.0** adds the reader: a
-distraction-free reflowable text reader with adjustable typography, light/dark
-mode, persistent reading position, and bookmarks.
+The Flutter reading client for ReadMe.ai: a personal library (PDF, EPUB,
+Markdown, and text uploads) with EPUB cover art and a *Continue reading*
+shelf; a distraction-free reflowable reader with serif/sans typography,
+Light/Sepia/Dark pages, a chapter contents sheet, automatic resume, and
+bookmarks; and contextual AI explanations of any selected word, sentence, or
+passage. Theme and reading preferences persist across launches
+(`shared_preferences`, behind `core/storage/PreferencesStore`).
+
+## Running locally without Firebase
+
+With the API started with `DEV_AUTH=true` (see the root README), the client can
+skip Firebase entirely and sign in as a mock user:
+
+```bash
+flutter run -d chrome --web-port 8080 \
+  --dart-define=DEV_AUTH=true \
+  --dart-define=API_BASE_URL=http://localhost:8000
+```
+
+On an Android emulator use `API_BASE_URL=http://10.0.2.2:8000`; debug builds
+allow plain HTTP to a local API, release builds require HTTPS. A "Dev Mode"
+ribbon marks development-auth builds; never ship one.
 
 ## Firebase setup (required to actually sign in)
 
@@ -69,9 +88,13 @@ lib/features/reader/
 ```
 
 The reader (`/home/books/:bookId/read`) renders reflowable text with adjustable
-font size / line spacing and light/dark mode. Reading position and bookmarks use
-**stable character-offset anchors** (not page numbers). Non-text formats (PDF)
-show a documented "preview not available yet" message pending a future parser.
+font size / line spacing and light/dark mode. The server converts PDF, EPUB, and
+text uploads into the same readable text, so the reader has a single rendering
+path. Reading position and bookmarks use **stable character-offset anchors**
+(not page numbers); the position is saved shortly after scrolling stops and
+when the reader closes. Books the server could not prepare (e.g. scanned or
+password-protected files) show a "not ready" message, and their detail screen
+explains why and offers to try again.
 
 ## Design system
 

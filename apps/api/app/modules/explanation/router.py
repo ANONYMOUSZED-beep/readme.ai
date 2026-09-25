@@ -37,12 +37,14 @@ async def explain(
 
     Successful explanations count toward today's tasks.
     """
+    # Read before the call: a rollback inside it expires `user`.
+    user_id = user.id
     explanation = await engine.explain(
-        user_id=user.id,
+        user_id=user_id,
         book_id=book_id,
         anchor=payload.anchor,
         end_anchor=payload.end_anchor,
         selected_text=payload.selected_text,
     )
-    await activity.record_explanation(user.id, today)
+    await activity.record_explanation(user_id, today)
     return explanation

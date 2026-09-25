@@ -25,6 +25,8 @@ Future<ProviderContainer> pumpReader(
   final container = ProviderContainer(
     overrides: [
       readerRepositoryProvider.overrideWithValue(repository),
+      // Reading time never accrues on its own: saves stay deterministic.
+      readingStopwatchProvider.overrideWithValue(Stopwatch.new),
       activityRepositoryProvider.overrideWithValue(
         activityRepository ?? FakeActivityRepository(),
       ),

@@ -508,9 +508,9 @@ class _ProcessingFailureState extends ConsumerState<_ProcessingFailure> {
     final error = widget.error;
     final (title, message) = switch (error) {
       ProcessingError.unsupportedFormat => (
-        'This format is coming soon',
-        'PDF and EPUB reading is on the way. For now, upload a .txt or '
-            '.md version to read it here.',
+        "This format isn't supported",
+        'ReadMe.ai reads PDF, EPUB, TXT and Markdown files. Convert the book '
+            'to one of those and upload it again.',
       ),
       ProcessingError.emptyDocument => (
         'No readable text found',

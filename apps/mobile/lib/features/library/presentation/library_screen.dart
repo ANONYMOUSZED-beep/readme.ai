@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/files/file_picker_service.dart';
+import '../../../core/network/dio_error_mapper.dart';
 import '../../../core/router/app_routes.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/theme_mode_controller.dart';
@@ -55,9 +56,23 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       // The empty state carries its own upload call to action.
       floatingActionButton: hasBooks
           ? FloatingActionButton.extended(
-              onPressed: () => _handleUpload(context),
-              icon: const Icon(Icons.add_rounded),
-              label: Text(l10n.uploadBook),
+              // Disabled while a book uploads, so it can't be sent twice.
+              onPressed: _uploadingName == null
+                  ? () => _handleUpload(context)
+                  : null,
+              icon: _uploadingName == null
+                  ? const Icon(Icons.add_rounded)
+                  : SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.4,
+                        color: Theme.of(context).colorScheme.onPrimary,
+                      ),
+                    ),
+              label: Text(
+                _uploadingName == null ? l10n.uploadBook : l10n.uploadingBook,
+              ),
             )
           : null,
       body: SafeArea(
@@ -172,10 +187,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                     book.originalFilename.toLowerCase().contains(normalized),
               )
               .toList();
-    final lastOpenedId = ref.watch(lastOpenedBookProvider);
-    final continueBook = normalized.isEmpty
-        ? books.where((book) => book.id == lastOpenedId).firstOrNull
-        : null;
+    final continueBook = normalized.isEmpty ? _continueBook(books) : null;
     void openReader(Book book) => context.goNamed(
       AppRoutes.readerName,
       pathParameters: {'bookId': book.id},
@@ -257,6 +269,22 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     ];
   }
 
+  /// The book to offer under "Continue reading": the one last opened on this
+  /// device, else the most recent unfinished book from the reading history the
+  /// server keeps (so it survives reinstalls and follows the reader across
+  /// devices).
+  Book? _continueBook(List<Book> books) {
+    final byId = {for (final book in books) book.id: book};
+    final lastOpened = byId[ref.watch(lastOpenedBookProvider)];
+    if (lastOpened != null) return lastOpened;
+    final recent = ref.watch(recentReadingProvider).value ?? const [];
+    for (final read in recent) {
+      final book = byId[read.bookId];
+      if (book != null && !read.isFinished) return book;
+    }
+    return null;
+  }
+
   void _openAccount(BuildContext context) {
     showModalBottomSheet<void>(
       context: context,
@@ -279,10 +307,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             picked,
             onProgress: (progress) => _uploadProgress.value = progress,
           );
-    } on Object {
+    } on Object catch (error) {
+      // Prefer the server's reason (e.g. "file too large") when it gives one.
       messenger
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(l10n.uploadFailed)));
+        ..showSnackBar(
+          SnackBar(
+            content: Text(describeError(error, fallback: l10n.uploadFailed)),
+          ),
+        );
     } finally {
       if (mounted) setState(() => _uploadingName = null);
     }

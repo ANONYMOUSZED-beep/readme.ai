@@ -41,6 +41,8 @@ Future<void> pumpApp(
         readerRepositoryProvider.overrideWithValue(
           readerRepository ?? FakeReaderRepository(),
         ),
+        // Reading time never accrues on its own: saves stay deterministic.
+        readingStopwatchProvider.overrideWithValue(Stopwatch.new),
         activityRepositoryProvider.overrideWithValue(
           activityRepository ?? FakeActivityRepository(),
         ),

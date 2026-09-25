@@ -24,6 +24,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -42,11 +43,12 @@ class ProcessedBook(Base):
     """Document-level processing record and metadata (one per book)."""
 
     __tablename__ = "processed_books"
+    # Mirrors migration 0004: a named unique constraint plus a plain index.
+    __table_args__ = (UniqueConstraint("book_id", name="uq_processed_books_book_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     book_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("books.id", ondelete="CASCADE"),
-        unique=True,
         index=True,
         nullable=False,
     )

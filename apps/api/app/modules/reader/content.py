@@ -6,7 +6,7 @@ document, never from raw uploaded files.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 
@@ -25,3 +25,5 @@ class ReaderContentView:
     title: str
     text: str | None
     character_count: int
+    # (title, start offset) per chapter; empty when there is no text.
+    chapters: list[tuple[str | None, int]] = field(default_factory=list)

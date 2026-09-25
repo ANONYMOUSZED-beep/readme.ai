@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../../../core/files/picked_book.dart';
 import 'book.dart';
 import 'book_processing.dart';
@@ -32,4 +34,7 @@ abstract interface class LibraryRepository {
 
   /// Delete a book by id.
   Future<void> deleteBook(String id);
+
+  /// The book's cover image bytes, or `null` if it has none.
+  Future<Uint8List?> getCover(String id);
 }

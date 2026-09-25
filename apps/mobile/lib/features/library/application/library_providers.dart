@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/dio_client.dart';
@@ -22,4 +24,9 @@ final bookProcessingProvider = FutureProvider.family<BookProcessing?, String>((
   id,
 ) {
   return ref.watch(libraryRepositoryProvider).getProcessing(id);
+});
+
+/// A book's cover image (kept for the session once loaded).
+final bookCoverProvider = FutureProvider.family<Uint8List?, String>((ref, id) {
+  return ref.watch(libraryRepositoryProvider).getCover(id);
 });

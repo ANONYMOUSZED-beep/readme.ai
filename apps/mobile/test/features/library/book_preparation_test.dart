@@ -129,7 +129,7 @@ void main() {
     await _openDetail(tester);
     await tester.pumpAndSettle();
 
-    expect(find.text('This format is coming soon'), findsOneWidget);
+    expect(find.text("This format isn't supported"), findsOneWidget);
     expect(find.text('Try again'), findsNothing);
   });
 

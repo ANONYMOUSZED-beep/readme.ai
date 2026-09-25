@@ -16,6 +16,8 @@ from app.db.session import get_db_session, get_db_sessionmaker
 from app.modules.library.dependencies import get_book_service
 from app.modules.library.repository import BookRepository
 from app.modules.library.service import BookService
+from app.modules.processing.processors.epub import EpubProcessor
+from app.modules.processing.processors.pdf import PdfProcessor
 from app.modules.processing.processors.plain_text import PlainTextProcessor
 from app.modules.processing.registry import ProcessorRegistry
 from app.modules.processing.repository import ProcessingRepository
@@ -31,10 +33,11 @@ from app.modules.processing.trigger import (
 def get_processor_registry() -> ProcessorRegistry:
     """Registry of available processors.
 
-    Add future processors (PDF, EPUB, DOCX, OCR) to this list — the only place
-    that needs to change to support a new format.
+    Add future processors (DOCX, OCR, ...) to this list — the only place that
+    needs to change to support a new format. Binary formats are listed first
+    so a file is matched by its real format before the text fallback.
     """
-    return ProcessorRegistry([PlainTextProcessor()])
+    return ProcessorRegistry([EpubProcessor(), PdfProcessor(), PlainTextProcessor()])
 
 
 def get_processing_repository(

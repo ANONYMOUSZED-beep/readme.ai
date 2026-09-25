@@ -117,8 +117,15 @@ class _TodayCardBody extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
             child: Row(
               children: [
-                Text("Today's tasks", style: theme.textTheme.titleSmall),
-                const Spacer(),
+                Expanded(
+                  child: Text(
+                    "Today's tasks",
+                    style: theme.textTheme.titleSmall,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Text(
                   allDone
                       ? 'All done'

@@ -64,7 +64,8 @@ class LibraryController extends AsyncNotifier<List<Book>> {
     await _repository.retryProcessing(id);
     ref
       ..invalidate(bookProvider(id))
-      ..invalidate(bookProcessingProvider(id));
+      ..invalidate(bookProcessingProvider(id))
+      ..invalidate(bookCoverProvider(id));
     state = AsyncData(_settle(await _repository.listBooks()));
   }
 

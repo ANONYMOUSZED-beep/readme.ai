@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.prompts.sanitize import fence_safe
+
 # Bump when the template changes so cached/observed outputs can be attributed.
 WORD_EXPLANATION_PROMPT_VERSION = "1.0.0"
 
@@ -37,7 +39,7 @@ def render_word_explanation_prompt(
 ) -> str:
     """Render the word-explanation prompt from its template."""
     return _TEMPLATE.format(
-        word=word,
-        context=context,
-        book_title=book_title or "this book",
+        word=fence_safe(word),
+        context=fence_safe(context),
+        book_title=fence_safe(book_title) or "this book",
     )

@@ -30,7 +30,11 @@ class ReaderController {
       progressPercentage: progressPercentage,
       readingTimeSeconds: readingTimeSeconds,
     );
-    _ref.invalidate(readingProgressProvider(bookId));
+    // The final save can outlive its scope (e.g. the app shutting down).
+    if (!_ref.mounted) return;
+    _ref
+      ..invalidate(readingProgressProvider(bookId))
+      ..invalidate(recentReadingProvider);
   }
 
   /// Save the final position when leaving the reader, then refresh today's
@@ -49,6 +53,7 @@ class ReaderController {
       progressPercentage: progressPercentage,
       readingTimeSeconds: readingTimeSeconds,
     );
+    if (!_ref.mounted) return;
     _ref.invalidate(activitySummaryProvider);
   }
 
@@ -59,6 +64,7 @@ class ReaderController {
     String? label,
   }) async {
     await _repository.createBookmark(bookId, anchor: anchor, label: label);
+    if (!_ref.mounted) return;
     _ref
       ..invalidate(bookmarksProvider(bookId))
       ..invalidate(activitySummaryProvider);
@@ -67,6 +73,7 @@ class ReaderController {
   /// Delete a bookmark and refresh the bookmark list.
   Future<void> deleteBookmark(String bookId, String bookmarkId) async {
     await _repository.deleteBookmark(bookId, bookmarkId);
+    if (!_ref.mounted) return;
     _ref.invalidate(bookmarksProvider(bookId));
   }
 }

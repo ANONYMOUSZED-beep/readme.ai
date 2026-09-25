@@ -53,7 +53,13 @@ class BackgroundProcessingTrigger:
         self._runner = runner
 
     async def schedule(self, user_id: uuid.UUID, book_id: uuid.UUID) -> None:
-        await self._service.mark_queued(user_id, book_id)
+        try:
+            await self._service.mark_queued(user_id, book_id)
+        except Exception:
+            # The upload is already committed and must still succeed; the book
+            # stays UPLOADED and can be processed later via the processing API.
+            logger.exception("processing.queue_failed", extra={"book_id": str(book_id)})
+            return
         self._background_tasks.add_task(_run_logged, self._runner, user_id, book_id)
 
 

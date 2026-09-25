@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.prompts.sanitize import fence_safe
+
 PARAGRAPH_EXPLANATION_PROMPT_VERSION = "1.0.0"
 
 _TEMPLATE = """\
@@ -38,7 +40,7 @@ def render_paragraph_explanation_prompt(
 ) -> str:
     """Render the paragraph-explanation prompt from its template."""
     return _TEMPLATE.format(
-        paragraph=paragraph,
-        context=context,
-        book_title=book_title or "this book",
+        paragraph=fence_safe(paragraph),
+        context=fence_safe(context),
+        book_title=fence_safe(book_title) or "this book",
     )

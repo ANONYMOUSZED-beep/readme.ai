@@ -11,6 +11,14 @@ on:
       - "apps/mobile/**"
       - ".github/workflows/frontend-ci.yml"
 
+permissions:
+  contents: read
+
+# A newer push to the same branch/PR supersedes any run still in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 defaults:
   run:
     working-directory: apps/mobile

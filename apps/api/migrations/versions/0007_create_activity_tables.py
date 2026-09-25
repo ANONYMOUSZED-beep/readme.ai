@@ -1,12 +1,11 @@
-"""create reading_activity and reading_goals; backfill book status
+"""create reading_activity and reading_goals
 
-Revision ID: 0005_create_activity_tables
-Revises: 0004_create_processing_tables
+Revision ID: 0007_create_activity_tables
+Revises: 0006_add_book_cover_storage_key
 Create Date: 2026-09-25
 
-Processing now keeps ``books.status`` in step with the processing record
-(READY / FAILED). Books processed before that change were left at UPLOADED,
-so their status is backfilled from ``processed_books``.
+``books.status`` is backfilled from processing records in
+0005_backfill_book_status.
 """
 
 from __future__ import annotations
@@ -17,8 +16,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0005_create_activity_tables"
-down_revision: str | None = "0004_create_processing_tables"
+revision: str = "0007_create_activity_tables"
+down_revision: str | None = "0006_add_book_cover_storage_key"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -66,20 +65,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("user_id"),
     )
-
-    for processing_status, book_status in (
-        ("COMPLETED", "READY"),
-        ("FAILED", "FAILED"),
-        ("PROCESSING", "PROCESSING"),
-        ("QUEUED", "PROCESSING"),
-    ):
-        op.execute(
-            sa.text(
-                "UPDATE books SET status = :book_status WHERE id IN ("
-                "SELECT book_id FROM processed_books WHERE status = :processing"
-                ")"
-            ).bindparams(book_status=book_status, processing=processing_status)
-        )
 
 
 def downgrade() -> None:

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/logging/app_logger.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/state_message.dart';
@@ -18,9 +19,11 @@ import '../application/reader_settings.dart';
 import '../application/reader_settings_controller.dart';
 import '../domain/book_content.dart';
 import '../domain/bookmark.dart';
+import '../domain/chapter_mark.dart';
 import '../domain/content_format.dart';
 import 'reader_palette.dart';
 import 'widgets/bookmarks_sheet.dart';
+import 'widgets/contents_sheet.dart';
 import 'widgets/explainable_text.dart';
 import 'widgets/reader_settings_sheet.dart';
 
@@ -47,13 +50,23 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     with WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
   // Measures reading time between saves; paused while the app is hidden.
-  final Stopwatch _sessionStopwatch = Stopwatch()..start();
+  late final Stopwatch _sessionStopwatch;
   // Scroll-driven state lives in notifiers so scrolling never rebuilds the
   // (potentially very long) book text.
   final ValueNotifier<double> _progress = ValueNotifier(0);
   final ValueNotifier<bool> _chromeVisible = ValueNotifier(true);
   Timer? _saveDebounce;
+
+  // Read once: `ref` must not be used in dispose, where the last save runs.
+  late final ReaderController _readerController;
+  late final AppLogger _logger;
   bool _restored = false;
+
+  /// Whether the saved position has loaded (whether or not there was one).
+  bool _progressLoaded = false;
+
+  /// Whether the position moved since the last save.
+  bool _unsaved = false;
   bool _showTip = true;
   int _characterCount = 0;
   String? _text;
@@ -66,6 +79,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   @override
   void initState() {
     super.initState();
+    _readerController = ref.read(readerControllerProvider);
+    _sessionStopwatch = ref.read(readingStopwatchProvider)();
+    _logger = ref.read(loggerProvider);
     WidgetsBinding.instance.addObserver(this);
     // Providers can't be modified mid-build; record the visit right after.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -106,7 +122,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   }
 
   double get _scrollFraction {
-    if (!_scrollController.hasClients) return 0;
+    // Detached (e.g. while disposing): fall back to the last observed position.
+    if (!_scrollController.hasClients) return _progress.value;
     final max = _scrollController.position.maxScrollExtent;
     if (max <= 0) return 0;
     return (_scrollController.offset / max).clamp(0.0, 1.0);
@@ -120,6 +137,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       return false;
     }
     _progress.value = _scrollFraction;
+    _unsaved = true;
     _saveDebounce?.cancel();
     _saveDebounce = Timer(const Duration(milliseconds: 1200), _persistPosition);
 
@@ -138,12 +156,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   ///
   /// [endSession] also refreshes today's activity (used when leaving).
   void _persistPosition({bool endSession = false}) {
-    if (!_scrollController.hasClients || _characterCount == 0) return;
-    final fraction = _scrollFraction;
+    // Runs from dispose too, after the scroll view has detached, so it relies
+    // on [_scrollFraction]'s last observed position rather than the controller.
+    if (_characterCount == 0) return;
+    // Leaving before the saved position arrives must not overwrite it with 0.
+    if (!_progressLoaded && !_unsaved) return;
     final seconds = _sessionStopwatch.elapsed.inSeconds;
+    // Nothing moved and no time passed: not worth a request.
+    if (!_unsaved && seconds == 0) return;
+    _unsaved = false;
+    final fraction = _scrollFraction;
     // Keeps running (or stopped) as it was; only the lap restarts.
     _sessionStopwatch.reset();
-    final controller = ref.read(readerControllerProvider);
+    final controller = _readerController;
     final save = endSession ? controller.endSession : controller.saveProgress;
     unawaited(
       save(
@@ -151,7 +176,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         currentPosition: _offsetFromFraction(fraction).toString(),
         progressPercentage: fraction * 100,
         readingTimeSeconds: seconds,
-      ),
+      ).catchError((Object error) {
+        // Best effort: the next save (or next session) catches up.
+        _logger.warning('Could not save reading progress: $error');
+      }),
     );
     if (!endSession) _noteReading(seconds);
   }
@@ -204,8 +232,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     });
   }
 
-  void _jumpToAnchor(String anchor) {
-    final offset = int.tryParse(anchor) ?? 0;
+  void _jumpToAnchor(String anchor) => _jumpToOffset(int.tryParse(anchor) ?? 0);
+
+  void _jumpToOffset(int offset) {
     if (_characterCount == 0 || !_scrollController.hasClients) return;
     final fraction = (offset / _characterCount).clamp(0.0, 1.0);
     _chromeVisible.value = true;
@@ -248,6 +277,21 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     );
   }
 
+  void _openContents(List<ChapterMark> chapters) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => ContentsSheet(
+        chapters: chapters,
+        currentOffset: _offsetFromFraction(_progress.value),
+        onSelect: (chapter) {
+          Navigator.of(sheetContext).pop();
+          _jumpToOffset(chapter.startOffset);
+        },
+      ),
+    );
+  }
+
   void _openSettings() {
     showModalBottomSheet<void>(
       context: context,
@@ -279,6 +323,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       Theme.of(context).brightness,
     );
     final content = contentState.value;
+    final chapters = content?.chapters ?? const <ChapterMark>[];
     final readable =
         content != null &&
         content.format == ContentFormat.text &&
@@ -323,6 +368,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                 onBookmark: readable ? _addBookmark : null,
                 onBookmarks: _openBookmarks,
                 onSettings: _openSettings,
+                // A single chapter has nothing to navigate between.
+                onContents: readable && chapters.length > 1
+                    ? () => _openContents(chapters)
+                    : null,
               ),
             ),
             if (readable)
@@ -353,16 +402,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (content.format != ContentFormat.text || content.text == null) {
       return StateMessage(
         key: const ValueKey('unsupported-reader'),
-        icon: Icons.picture_as_pdf_outlined,
+        icon: Icons.menu_book_outlined,
         title: l10n.readerUnsupportedFormat,
-        message:
-            'Text files are fully supported today. PDF reading is coming next.',
+        message: l10n.readerUnsupportedDetail,
       );
     }
 
     _characterCount = content.characterCount;
     _text = content.text;
-    final resume = ref.watch(readingProgressProvider(widget.bookId)).value;
+    final resumeState = ref.watch(readingProgressProvider(widget.bookId));
+    if (resumeState.hasValue) _progressLoaded = true;
+    final resume = resumeState.value;
     if (resume != null) _restorePosition(resume.progressPercentage);
 
     final width = MediaQuery.sizeOf(context).width;
@@ -432,6 +482,7 @@ class _TopBar extends StatelessWidget {
     required this.onBookmark,
     required this.onBookmarks,
     required this.onSettings,
+    this.onContents,
   });
 
   final ValueListenable<bool> visible;
@@ -440,9 +491,13 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onBookmarks;
   final VoidCallback onSettings;
 
+  /// Opens the table of contents; `null` hides the button.
+  final VoidCallback? onContents;
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final onContents = this.onContents;
     final canPop = Navigator.of(context).canPop();
     return ValueListenableBuilder<bool>(
       valueListenable: visible,
@@ -480,6 +535,13 @@ class _TopBar extends StatelessWidget {
               children: [
                 if (canPop) BackButton(color: palette.ink),
                 const Spacer(),
+                if (onContents != null)
+                  IconButton(
+                    tooltip: l10n.contents,
+                    color: palette.ink,
+                    icon: const Icon(Icons.toc_rounded),
+                    onPressed: onContents,
+                  ),
                 IconButton(
                   tooltip: l10n.bookmarkThisPosition,
                   color: palette.ink,

@@ -10,6 +10,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.modules.reader.content import ContentFormat
 
 
+class ChapterResponse(BaseModel):
+    """One entry of a book's table of contents."""
+
+    title: str | None = Field(
+        default=None, description="Chapter title, when the book provides one."
+    )
+    start_offset: int = Field(
+        description="Character offset in `content` where the chapter begins.",
+    )
+
+
 class BookContentResponse(BaseModel):
     """Readable content of a book served to the reader."""
 
@@ -21,6 +32,10 @@ class BookContentResponse(BaseModel):
         description="The readable text, or null when the format is unsupported.",
     )
     character_count: int = Field(description="Number of characters in the content.")
+    chapters: list[ChapterResponse] = Field(
+        default_factory=list,
+        description="Table of contents (chapter starts), in reading order.",
+    )
 
 
 class ReadingProgressResponse(BaseModel):
@@ -53,6 +68,9 @@ class UpdateProgressRequest(BaseModel):
     reading_time_seconds: int = Field(
         default=0,
         ge=0,
+        # One save never accounts for more than a day of reading; this also
+        # keeps the running total well inside the column's integer range.
+        le=86_400,
         description="Reading time to add for this session, in seconds.",
     )
 
@@ -89,3 +107,11 @@ class BookmarkListResponse(BaseModel):
 
     items: list[BookmarkResponse] = Field(description="The bookmarks.")
     total: int = Field(description="Number of bookmarks returned.")
+
+
+class RecentReadingListResponse(BaseModel):
+    """Books the user has been reading, most recently read first."""
+
+    items: list[ReadingProgressResponse] = Field(
+        description="Reading positions, newest first.",
+    )

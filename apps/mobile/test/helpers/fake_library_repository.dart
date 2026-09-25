@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:readme_ai/core/files/picked_book.dart';
 import 'package:readme_ai/features/library/domain/book.dart';
@@ -35,6 +36,9 @@ class FakeLibraryRepository implements LibraryRepository {
   final Map<String, BookProcessing> processing = {};
 
   final List<String> retried = [];
+
+  /// Cover images returned by [getCover], by book id.
+  final Map<String, Uint8List> covers = {};
 
   int listCalls = 0;
 
@@ -102,4 +106,7 @@ class FakeLibraryRepository implements LibraryRepository {
   Future<void> deleteBook(String id) async {
     _books.removeWhere((book) => book.id == id);
   }
+
+  @override
+  Future<Uint8List?> getCover(String id) async => covers[id];
 }
