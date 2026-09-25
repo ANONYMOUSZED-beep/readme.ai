@@ -58,6 +58,9 @@ void main() {
       await pumpApp(tester, authRepository: repository);
       expect(find.byType(LibraryScreen), findsOneWidget);
 
+      // Sign out lives in the account sheet behind the avatar.
+      await tester.tap(find.byTooltip('Account'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byIcon(Icons.logout));
       await tester.pumpAndSettle();
 

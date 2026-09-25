@@ -27,6 +27,8 @@ dependencies:
   google_sign_in: ^7.2.0
   intl: 0.20.2
   json_annotation: ^4.12.0
+  # Remembers reading preferences (theme, typography) across launches.
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   build_runner: ^2.15.0
@@ -40,3 +42,16 @@ flutter:
   uses-material-design: true
   # Generate localization delegates from the ARB files in lib/l10n.
   generate: true
+  # Literata — a serif designed for long-form screen reading (SIL OFL 1.1,
+  # see assets/fonts/literata/OFL.txt). Bundled so headings and book text
+  # render identically on every platform, including web.
+  fonts:
+    - family: Literata
+      fonts:
+        - asset: assets/fonts/literata/Literata-Regular.ttf
+        - asset: assets/fonts/literata/Literata-Italic.ttf
+          style: italic
+        - asset: assets/fonts/literata/Literata-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/literata/Literata-Bold.ttf
+          weight: 700

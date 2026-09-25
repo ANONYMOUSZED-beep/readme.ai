@@ -18,7 +18,7 @@ class FilePickerServiceImpl implements FilePickerService {
   Future<PickedBook?> pickBook() async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['pdf', 'epub', 'txt'],
+      allowedExtensions: const ['pdf', 'epub', 'txt', 'md', 'markdown'],
       withData: true,
     );
     final file = result?.files.singleOrNull;

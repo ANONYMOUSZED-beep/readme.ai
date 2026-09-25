@@ -42,6 +42,15 @@ COPY --from=builder /opt/venv /opt/venv
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+
+# The service runs unprivileged, so the local storage root (STORAGE_LOCAL_PATH,
+# default var/storage relative to /app) must exist and belong to that user —
+# otherwise every upload fails with a permission error. A volume mounted here
+# inherits this ownership on first use.
+RUN chmod 0755 docker-entrypoint.sh \
+    && mkdir -p var/storage \
+    && chown -R app:app var
 
 USER app
 
@@ -52,4 +61,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request,sys; \
 sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health').status==200 else sys.exit(1)"
 
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

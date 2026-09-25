@@ -17,5 +17,8 @@ abstract class Book with _$Book {
     required DateTime uploadedAt,
     int? totalPages,
     String? coverImageUrl,
+
+    /// Whether the server has a cover picture for this book (EPUB covers).
+    @Default(false) bool hasCover,
   }) = _Book;
 }

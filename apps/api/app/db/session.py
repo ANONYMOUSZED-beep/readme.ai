@@ -49,6 +49,15 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
+def get_db_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    """FastAPI dependency providing the session factory itself.
+
+    For work that outlives a request (e.g. background processing), which must
+    open its own session once the request-scoped one has closed.
+    """
+    return get_session_factory()
+
+
 async def get_db_session() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency yielding a scoped async session.
 

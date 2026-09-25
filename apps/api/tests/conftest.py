@@ -18,7 +18,7 @@ from app.core.config import Environment, LogFormat, LogLevel, Settings
 from app.core.errors import UnauthorizedError
 from app.core.storage.provider import get_storage_service
 from app.db.base import Base
-from app.db.session import get_db_session
+from app.db.session import get_db_session, get_db_sessionmaker
 from app.main import create_app
 from app.modules.auth.dependencies import get_token_verifier
 from app.modules.auth.verifier import FirebaseIdentity
@@ -197,6 +197,7 @@ async def client(
             yield session
 
     app.dependency_overrides[get_db_session] = _override_session
+    app.dependency_overrides[get_db_sessionmaker] = lambda: sessionmaker
     app.dependency_overrides[get_token_verifier] = lambda: verifier
     app.dependency_overrides[get_storage_service] = lambda: storage
     app.dependency_overrides[get_explanation_provider] = lambda: explanation_provider

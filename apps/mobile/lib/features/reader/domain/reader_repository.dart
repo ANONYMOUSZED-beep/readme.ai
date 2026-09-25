@@ -1,6 +1,7 @@
 import 'book_content.dart';
 import 'bookmark.dart';
 import 'reading_progress.dart';
+import 'recent_read.dart';
 
 /// Contract for the reading experience: content, position, and bookmarks.
 ///
@@ -21,6 +22,9 @@ abstract interface class ReaderRepository {
     required double progressPercentage,
     required int readingTimeSeconds,
   });
+
+  /// Books the user has been reading, most recently read first.
+  Future<List<RecentRead>> listRecent();
 
   /// List the book's bookmarks, newest first.
   Future<List<Bookmark>> listBookmarks(String bookId);

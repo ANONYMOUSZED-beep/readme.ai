@@ -11,6 +11,8 @@ import uuid
 
 from fastapi import APIRouter
 
+from app.modules.activity.clock import ClientToday
+from app.modules.activity.dependencies import ActivityServiceDep
 from app.modules.auth.dependencies import CurrentUser
 from app.modules.explanation.schemas import ExplainRequest, ExplanationResponse
 from app.modules.learning.dependencies import LearningEngineDep
@@ -28,12 +30,21 @@ async def explain(
     payload: ExplainRequest,
     user: CurrentUser,
     engine: LearningEngineDep,
+    activity: ActivityServiceDep,
+    today: ClientToday,
 ) -> ExplanationResponse:
-    """Explain a selection; the Learning Intelligence Engine orchestrates."""
-    return await engine.explain(
-        user_id=user.id,
+    """Explain a selection; the Learning Intelligence Engine orchestrates.
+
+    Successful explanations count toward today's tasks.
+    """
+    # Read before the call: a rollback inside it expires `user`.
+    user_id = user.id
+    explanation = await engine.explain(
+        user_id=user_id,
         book_id=book_id,
         anchor=payload.anchor,
         end_anchor=payload.end_anchor,
         selected_text=payload.selected_text,
     )
+    await activity.record_explanation(user_id, today)
+    return explanation

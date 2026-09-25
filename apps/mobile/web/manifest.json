@@ -1,11 +1,11 @@
 {
-    "name": "readme_ai",
-    "short_name": "readme_ai",
+    "name": "ReadMe.ai",
+    "short_name": "ReadMe.ai",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#171821",
+    "theme_color": "#171821",
+    "description": "A calm reading space that explains difficult passages in context.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

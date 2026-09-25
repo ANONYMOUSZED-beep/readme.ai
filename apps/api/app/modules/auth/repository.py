@@ -49,3 +49,7 @@ class UserRepository:
     async def commit(self) -> None:
         """Commit the current unit of work."""
         await self._session.commit()
+
+    async def rollback(self) -> None:
+        """Discard the current unit of work (e.g. after a constraint violation)."""
+        await self._session.rollback()

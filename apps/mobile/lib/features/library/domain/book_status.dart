@@ -19,6 +19,11 @@ enum BookStatus {
     };
   }
 
+  /// Whether the book is still being prepared for reading, so its status is
+  /// expected to change without user action.
+  bool get isPreparing =>
+      this == BookStatus.uploading || this == BookStatus.processing;
+
   /// A human-readable label for display.
   String get label => switch (this) {
     BookStatus.uploading => 'Uploading',

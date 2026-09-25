@@ -11,7 +11,7 @@ from __future__ import annotations
 from enum import StrEnum
 from functools import lru_cache
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     # Maximum accepted upload size in bytes (default 50 MiB).
     max_upload_size_bytes: int = Field(
         default=52_428_800,
+        gt=0,
         alias="MAX_UPLOAD_SIZE_BYTES",
     )
 
@@ -125,8 +126,23 @@ class Settings(BaseSettings):
     ollama_model: str = Field(default="llama3.2", alias="OLLAMA_MODEL")
     ollama_timeout_seconds: float = Field(
         default=30.0,
+        gt=0,
         alias="OLLAMA_TIMEOUT_SECONDS",
     )
+
+    @model_validator(mode="after")
+    def _enforce_production_safety(self) -> Settings:
+        """Refuse to start a production service with unsafe configuration.
+
+        A misconfigured production deployment fails fast at startup instead of
+        silently accepting a public development token or rejecting every user.
+        """
+        if self.app_env is Environment.PRODUCTION:
+            if self.dev_auth:
+                raise ValueError("DEV_AUTH must not be enabled in production.")
+            if not self.firebase_project_id:
+                raise ValueError("FIREBASE_PROJECT_ID is required in production.")
+        return self
 
     @computed_field  # type: ignore[prop-decorator]
     @property

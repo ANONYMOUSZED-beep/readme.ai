@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 
-from app.core.errors import DependencyUnavailableError
+from app.core.errors import DependencyUnavailableError, ValidationError
 from app.modules.explanation.classifier import SelectionClassifier
 from app.modules.explanation.context_extractor import ContextExtractor
 from app.modules.explanation.enums import SelectionType
@@ -43,8 +43,17 @@ class ExplanationService:
     ) -> ExplanationResponse:
         book = await self._book_service.get_book(user_id, book_id)
 
-        start = _parse_offset(anchor)
-        end = _parse_offset(end_anchor) if end_anchor else start + len(selected_text)
+        start = _parse_offset(anchor, "anchor")
+        end = (
+            _parse_offset(end_anchor, "end_anchor")
+            if end_anchor
+            else start + len(selected_text)
+        )
+        if end < start:
+            raise ValidationError(
+                "The selection ends before it starts.",
+                details={"anchor": anchor, "end_anchor": end_anchor},
+            )
 
         analysis = await self._classifier.analyze(
             book_id=book_id,
@@ -83,8 +92,16 @@ class ExplanationService:
         )
 
 
-def _parse_offset(value: str) -> int:
-    try:
-        return max(0, int(value))
-    except ValueError:
-        return 0
+def _parse_offset(value: str, field: str) -> int:
+    """Parse a character-offset anchor, rejecting anything else.
+
+    Silently mapping a malformed anchor to offset 0 would explain the wrong
+    passage (the beginning of the book) instead of reporting the bad request.
+    """
+    stripped = value.strip()
+    if not stripped.isdigit() or not stripped.isascii():
+        raise ValidationError(
+            "Selection anchors must be non-negative character offsets.",
+            details={field: value},
+        )
+    return int(stripped)

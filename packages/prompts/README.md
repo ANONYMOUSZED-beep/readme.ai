@@ -13,5 +13,7 @@ strings.
 
 ## Status
 
-**Empty in Sprint 0.2 (foundation).** No AI features exist yet. Prompts are
-added when the AI Service is introduced in a later sprint.
+**Not yet extracted.** The explanation prompts currently live with the backend
+in [`apps/api/app/prompts`](../../apps/api/app/prompts), each with a version
+constant (e.g. `WORD_EXPLANATION_PROMPT_VERSION`). They move here once a second
+consumer (such as the background workers) needs them.

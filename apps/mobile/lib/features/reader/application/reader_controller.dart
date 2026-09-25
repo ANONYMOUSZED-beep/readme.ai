@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../activity/application/activity_providers.dart';
 import '../domain/reader_repository.dart';
 import 'reader_providers.dart';
 
@@ -15,34 +16,64 @@ class ReaderController {
 
   ReaderRepository get _repository => _ref.read(readerRepositoryProvider);
 
-  /// Persist the current reading position for [bookId].
+  /// Persist the current reading position for [bookId], then refresh the
+  /// cached progress so the library and book detail show the new position.
   Future<void> saveProgress(
     String bookId, {
     required String currentPosition,
     required double progressPercentage,
     required int readingTimeSeconds,
-  }) {
-    return _repository.saveProgress(
+  }) async {
+    await _repository.saveProgress(
       bookId,
       currentPosition: currentPosition,
       progressPercentage: progressPercentage,
       readingTimeSeconds: readingTimeSeconds,
     );
+    // The final save can outlive its scope (e.g. the app shutting down).
+    if (!_ref.mounted) return;
+    _ref
+      ..invalidate(readingProgressProvider(bookId))
+      ..invalidate(recentReadingProvider);
   }
 
-  /// Create a bookmark and refresh the bookmark list.
+  /// Save the final position when leaving the reader, then refresh today's
+  /// activity once so the library shows the session's reading time.
+  ///
+  /// Mid-session saves skip that refresh to avoid a request per page.
+  Future<void> endSession(
+    String bookId, {
+    required String currentPosition,
+    required double progressPercentage,
+    required int readingTimeSeconds,
+  }) async {
+    await saveProgress(
+      bookId,
+      currentPosition: currentPosition,
+      progressPercentage: progressPercentage,
+      readingTimeSeconds: readingTimeSeconds,
+    );
+    if (!_ref.mounted) return;
+    _ref.invalidate(activitySummaryProvider);
+  }
+
+  /// Create a bookmark and refresh the bookmark list (and today's tasks).
   Future<void> addBookmark(
     String bookId, {
     required String anchor,
     String? label,
   }) async {
     await _repository.createBookmark(bookId, anchor: anchor, label: label);
-    _ref.invalidate(bookmarksProvider(bookId));
+    if (!_ref.mounted) return;
+    _ref
+      ..invalidate(bookmarksProvider(bookId))
+      ..invalidate(activitySummaryProvider);
   }
 
   /// Delete a bookmark and refresh the bookmark list.
   Future<void> deleteBookmark(String bookId, String bookmarkId) async {
     await _repository.deleteBookmark(bookId, bookmarkId);
+    if (!_ref.mounted) return;
     _ref.invalidate(bookmarksProvider(bookId));
   }
 }

@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required in every build type: the app talks to the ReadMe.ai API.
+         (Flutter's template only declares it for debug/profile builds.) -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="readme_ai"
+        android:label="ReadMe.ai"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

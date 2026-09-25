@@ -89,7 +89,15 @@ class OllamaExplanationProvider:
             raise ExplanationError(
                 ExplanationErrorCode.UNAVAILABLE, "The model is unavailable."
             ) from exc
+        except ValueError as exc:  # the server did not answer with JSON
+            raise ExplanationError(
+                ExplanationErrorCode.INVALID_RESPONSE, "Malformed model response."
+            ) from exc
 
+        if not isinstance(body, dict):
+            raise ExplanationError(
+                ExplanationErrorCode.INVALID_RESPONSE, "Unexpected model response."
+            )
         return _parse(body.get("response"))
 
 
@@ -109,7 +117,17 @@ def _parse(raw: object) -> GeneratedExplanation:
             ExplanationErrorCode.INVALID_RESPONSE, "Unexpected model response."
         )
     return GeneratedExplanation(
-        meaning=str(data.get("meaning", "")).strip(),
-        explanation=str(data.get("explanation", "")).strip(),
-        example=str(data.get("example", "")).strip(),
+        meaning=_text_field(data, "meaning"),
+        explanation=_text_field(data, "explanation"),
+        example=_text_field(data, "example"),
     )
+
+
+def _text_field(data: dict[str, object], key: str) -> str:
+    """Read a string field; a missing, null, or non-string value is empty.
+
+    Models occasionally emit ``null`` or a nested object for a field; coercing
+    those with ``str()`` would show the reader "None" or a Python repr.
+    """
+    value = data.get(key)
+    return value.strip() if isinstance(value, str) else ""

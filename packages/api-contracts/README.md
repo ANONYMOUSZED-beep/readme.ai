@@ -11,6 +11,7 @@ Flutter client (`apps/mobile`) and the FastAPI backend (`apps/api`).
 
 ## Status
 
-**Empty in Sprint 0.2 (foundation).** Only operational endpoints exist so far
-(`/health`, `/version`), whose schemas live with the backend. Product contracts
-are added here when the first business endpoints are designed.
+**Not yet extracted.** The product API's contract is currently the backend's
+OpenAPI schema (`/openapi.json`, served in development), and the Flutter client
+hand-writes matching DTOs in each feature's `data/` layer. Generating both sides
+from one definition here is the intended next step.

@@ -4,6 +4,7 @@ import '../domain/book_content.dart';
 import '../domain/bookmark.dart';
 import '../domain/reader_repository.dart';
 import '../domain/reading_progress.dart';
+import '../domain/recent_read.dart';
 import 'reader_dtos.dart';
 
 /// [ReaderRepository] backed by the ReadMe.ai HTTP API via [Dio].
@@ -50,6 +51,18 @@ class ReaderRepositoryImpl implements ReaderRepository {
       },
     );
     return ReadingProgressDto.fromJson(response.data!).toDomain();
+  }
+
+  @override
+  Future<List<RecentRead>> listRecent() async {
+    final response = await _dio.get<Map<String, dynamic>>(
+      '/api/v1/reading/recent',
+    );
+    final items = (response.data?['items'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
+    return items
+        .map((json) => RecentReadDto.fromJson(json).toDomain())
+        .toList();
   }
 
   @override

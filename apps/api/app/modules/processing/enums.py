@@ -8,9 +8,8 @@ from enum import StrEnum
 class ProcessingStatus(StrEnum):
     """Lifecycle of a book's processing.
 
-    ``QUEUED`` and ``PROCESSING`` exist to support a future background-worker
-    pipeline without redesign; the current inline trigger moves a book
-    ``QUEUED -> PROCESSING -> COMPLETED|FAILED`` within the request.
+    Uploading records ``QUEUED``; the background run then moves the book
+    ``PROCESSING -> COMPLETED|FAILED`` after the upload has responded.
     """
 
     QUEUED = "QUEUED"

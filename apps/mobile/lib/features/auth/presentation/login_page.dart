@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -21,81 +23,20 @@ class LoginPage extends ConsumerWidget {
       }
     });
 
+    final signIn = _SignInActions(
+      isLoading: state.isLoading,
+      onPressed: state.isLoading
+          ? null
+          : () => ref.read(authControllerProvider.notifier).signInWithGoogle(),
+    );
+
     return Scaffold(
-      body: Stack(
-        children: [
-          const Positioned(
-            top: -130,
-            right: -90,
-            child: _Glow(color: AppColors.apricot, size: 320),
-          ),
-          const Positioned(
-            bottom: -160,
-            left: -100,
-            child: _Glow(color: AppColors.lavender, size: 380),
-          ),
-          SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final wide = constraints.maxWidth >= 860;
-                return SingleChildScrollView(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: wide ? 56 : 24,
-                    vertical: 24,
-                  ),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight - 48,
-                    ),
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 1160),
-                        child: wide
-                            ? Row(
-                                children: [
-                                  const Expanded(flex: 6, child: _HeroCopy()),
-                                  const SizedBox(width: 72),
-                                  Expanded(
-                                    flex: 4,
-                                    child: _SignInCard(
-                                      isLoading: state.isLoading,
-                                      onPressed: state.isLoading
-                                          ? null
-                                          : () => ref
-                                                .read(
-                                                  authControllerProvider
-                                                      .notifier,
-                                                )
-                                                .signInWithGoogle(),
-                                    ),
-                                  ),
-                                ],
-                              )
-                            : Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const _HeroCopy(compact: true),
-                                  const SizedBox(height: 36),
-                                  _SignInCard(
-                                    isLoading: state.isLoading,
-                                    onPressed: state.isLoading
-                                        ? null
-                                        : () => ref
-                                              .read(
-                                                authControllerProvider.notifier,
-                                              )
-                                              .signInWithGoogle(),
-                                  ),
-                                ],
-                              ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) => constraints.maxWidth >= 860
+              ? _WideLayout(signIn: signIn, height: constraints.maxHeight)
+              : _CompactLayout(signIn: signIn, height: constraints.maxHeight),
+        ),
       ),
     );
   }
@@ -111,81 +52,164 @@ class LoginPage extends ConsumerWidget {
   }
 }
 
-class _HeroCopy extends StatelessWidget {
-  const _HeroCopy({this.compact = false});
+/// Phones: the story scrolls above sign-in actions pinned to the bottom, so
+/// the call to action is always visible without scrolling.
+class _CompactLayout extends StatelessWidget {
+  const _CompactLayout({required this.signIn, required this.height});
+
+  final Widget signIn;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    // Shrink the preview on short screens rather than pushing content away.
+    final previewScale = ((height - 440) / _ProductPreview.height).clamp(
+      0.5,
+      1.0,
+    );
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+            child: Column(
+              children: [
+                const _BrandMark(),
+                SizedBox(height: 28 * previewScale),
+                SizedBox(
+                  height: _ProductPreview.height * previewScale,
+                  child: const FittedBox(child: _ProductPreview()),
+                ),
+                SizedBox(height: 32 * previewScale),
+                const _Headline(compact: true),
+              ],
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+          child: signIn,
+        ),
+      ],
+    );
+  }
+}
+
+/// Tablets and desktop: copy and actions beside the product preview.
+class _WideLayout extends StatelessWidget {
+  const _WideLayout({required this.signIn, required this.height});
+
+  final Widget signIn;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 56, vertical: 20),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: height - 40),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1080),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const _BrandMark(),
+                      const SizedBox(height: 56),
+                      const _Headline(),
+                      const SizedBox(height: 40),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 380),
+                        child: signIn,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 64),
+                const Expanded(child: Center(child: _ProductPreview())),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Fades and lifts [child] into place on first build.
+class _Entrance extends StatelessWidget {
+  const _Entrance({required this.child, this.delayMs = 0});
+
+  final Widget child;
+  final int delayMs;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = 700 + delayMs;
+    return TweenAnimationBuilder<double>(
+      duration: Duration(milliseconds: total),
+      curve: Interval(delayMs / total, 1, curve: Curves.easeOutCubic),
+      tween: Tween(begin: 0, end: 1),
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 20 * (1 - value)),
+          child: child,
+        ),
+      ),
+      child: child,
+    );
+  }
+}
+
+class _Headline extends StatelessWidget {
+  const _Headline({this.compact = false});
 
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return TweenAnimationBuilder<double>(
-      duration: const Duration(milliseconds: 650),
-      curve: Curves.easeOutCubic,
-      tween: Tween(begin: 0, end: 1),
-      builder: (context, value, child) => Opacity(
-        opacity: value,
-        child: Transform.translate(
-          offset: Offset(0, 18 * (1 - value)),
-          child: child,
-        ),
-      ),
+    final l10n = AppLocalizations.of(context);
+    final align = compact ? TextAlign.center : TextAlign.left;
+    return _Entrance(
+      delayMs: 120,
       child: Column(
         crossAxisAlignment: compact
             ? CrossAxisAlignment.center
             : CrossAxisAlignment.start,
         children: [
-          const _BrandMark(),
-          SizedBox(height: compact ? 28 : 48),
           Text(
             'Read less.\nUnderstand more.',
-            textAlign: compact ? TextAlign.center : TextAlign.left,
-            style:
-                (compact
-                        ? theme.textTheme.displaySmall
-                        : theme.textTheme.displayLarge)
-                    ?.copyWith(fontSize: compact ? 44 : 70),
+            textAlign: align,
+            style: compact
+                ? theme.textTheme.displaySmall
+                : theme.textTheme.displayLarge,
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
           ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
+            constraints: const BoxConstraints(maxWidth: 460),
             child: Text(
-              'Your calm, AI-powered reading space. Turn difficult passages '
-              'into clear ideas without leaving the page.',
-              textAlign: compact ? TextAlign.center : TextAlign.left,
-              style: theme.textTheme.titleMedium?.copyWith(
+              '${l10n.loginSubtitle} Select any word or passage and get a '
+              'clear explanation, right where you are reading.',
+              textAlign: align,
+              style: theme.textTheme.bodyLarge?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
-                height: 1.55,
-                fontWeight: FontWeight.w500,
+                fontSize: 17,
               ),
             ),
           ),
-          if (!compact) ...[
-            const SizedBox(height: 40),
-            const Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _FeaturePill(
-                  icon: Icons.auto_awesome,
-                  label: 'Explain in context',
-                ),
-                _FeaturePill(
-                  icon: Icons.bookmark_outline,
-                  label: 'Keep your place',
-                ),
-                _FeaturePill(icon: Icons.tune, label: 'Read your way'),
-              ],
-            ),
-          ],
         ],
       ),
     );
   }
 }
 
-class _SignInCard extends StatelessWidget {
-  const _SignInCard({required this.isLoading, required this.onPressed});
+class _SignInActions extends StatelessWidget {
+  const _SignInActions({required this.isLoading, required this.onPressed});
 
   final bool isLoading;
   final VoidCallback? onPressed;
@@ -194,70 +218,24 @@ class _SignInCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
-    return TweenAnimationBuilder<double>(
-      duration: const Duration(milliseconds: 800),
-      curve: Curves.easeOutCubic,
-      tween: Tween(begin: 0, end: 1),
-      builder: (context, value, child) => Opacity(
-        opacity: value,
-        child: Transform.translate(
-          offset: Offset(0, 28 * (1 - value)),
-          child: child,
-        ),
-      ),
-      child: Container(
-        width: double.infinity,
-        constraints: const BoxConstraints(maxWidth: 440),
-        padding: const EdgeInsets.all(30),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface.withValues(alpha: 0.94),
-          borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: theme.colorScheme.outlineVariant),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.ink.withValues(alpha: 0.08),
-              blurRadius: 36,
-              offset: const Offset(0, 18),
-            ),
-          ],
-        ),
+    return _Entrance(
+      delayMs: 240,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(15),
-              ),
-              child: Icon(
-                Icons.waving_hand_outlined,
-                color: theme.colorScheme.primary,
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text('Welcome back', style: theme.textTheme.headlineSmall),
-            const SizedBox(height: 8),
-            Text(
-              l10n.loginSubtitle,
-              style: theme.textTheme.bodyLarge?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 30),
             FilledButton.icon(
               onPressed: onPressed,
               icon: isLoading
                   ? SizedBox(
-                      width: 18,
-                      height: 18,
+                      width: 20,
+                      height: 20,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
                         color: theme.colorScheme.onPrimary,
                       ),
                     )
-                  : const Icon(Icons.login_rounded),
+                  : const _GoogleGlyph(),
               label: Text(l10n.signInWithGoogle),
               style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(56),
@@ -265,22 +243,178 @@ class _SignInCard extends StatelessWidget {
             ),
             const SizedBox(height: 18),
             Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
                   Icons.lock_outline_rounded,
-                  size: 16,
+                  size: 15,
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
+                const SizedBox(width: 6),
+                Flexible(
                   child: Text(
                     'Private by design. Your library stays yours.',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+                    style: theme.textTheme.bodySmall,
                   ),
                 ),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A miniature reader page demonstrating the core interaction: a highlighted
+/// word with its in-context explanation.
+class _ProductPreview extends StatelessWidget {
+  const _ProductPreview();
+
+  static const double width = 340;
+  static const double height = 318;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final ink = theme.colorScheme.onSurface;
+    final body = TextStyle(
+      fontFamily: AppFonts.serif,
+      fontSize: 15,
+      height: 1.65,
+      color: ink.withValues(alpha: 0.82),
+    );
+
+    return _Entrance(
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // The page.
+            Positioned(
+              left: 14,
+              right: 14,
+              top: 0,
+              child: Transform.rotate(
+                angle: -1.5 * math.pi / 180,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(24, 26, 24, 34),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? AppColors.nightRaised
+                        : AppColors.paperRaised,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.ink.withValues(alpha: 0.10),
+                        blurRadius: 40,
+                        offset: const Offset(0, 22),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'CHAPTER ONE',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          letterSpacing: 1.6,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text.rich(
+                        TextSpan(
+                          style: body,
+                          children: [
+                            const TextSpan(
+                              text:
+                                  'The summer felt endless, yet every '
+                                  'golden afternoon was ',
+                            ),
+                            TextSpan(
+                              text: 'ephemeral',
+                              style: body.copyWith(
+                                color: ink,
+                                backgroundColor: theme.colorScheme.tertiary
+                                    .withValues(alpha: 0.22),
+                              ),
+                            ),
+                            const TextSpan(
+                              text:
+                                  ' — here, and then gone before '
+                                  'anyone thought to hold on.',
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            // The explanation card.
+            Positioned(
+              left: 0,
+              right: 40,
+              bottom: 0,
+              child: _Entrance(
+                delayMs: 420,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.ink.withValues(alpha: 0.22),
+                        blurRadius: 30,
+                        offset: const Offset(0, 16),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.auto_awesome_rounded,
+                            size: 15,
+                            color: isDark
+                                ? AppColors.insight
+                                : AppColors.insightDark,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'EPHEMERAL',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onPrimary.withValues(
+                                alpha: 0.7,
+                              ),
+                              letterSpacing: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Lasting a very short time. Here, the author '
+                        'contrasts how long summer feels with how quickly '
+                        'each moment passes.',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onPrimary,
+                          height: 1.45,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ],
         ),
@@ -299,64 +433,78 @@ class _BrandMark extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 46,
-          height: 46,
+          width: 36,
+          height: 36,
           decoration: BoxDecoration(
-            color: AppColors.ink,
-            borderRadius: BorderRadius.circular(14),
+            color: theme.colorScheme.primary,
+            borderRadius: BorderRadius.circular(11),
           ),
-          child: const Icon(Icons.auto_stories_rounded, color: Colors.white),
+          child: Icon(
+            Icons.auto_stories_rounded,
+            size: 19,
+            color: theme.colorScheme.onPrimary,
+          ),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 10),
         Text('ReadMe.ai', style: theme.textTheme.titleLarge),
       ],
     );
   }
 }
 
-class _FeaturePill extends StatelessWidget {
-  const _FeaturePill({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
+/// The four-color Google "G", drawn so no image asset is required.
+class _GoogleGlyph extends StatelessWidget {
+  const _GoogleGlyph();
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
+      width: 24,
+      height: 24,
+      padding: const EdgeInsets.all(4),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: theme.colorScheme.primary),
-          const SizedBox(width: 8),
-          Text(label, style: theme.textTheme.labelLarge),
-        ],
-      ),
+      child: const CustomPaint(painter: _GooglePainter()),
     );
   }
 }
 
-class _Glow extends StatelessWidget {
-  const _Glow({required this.color, required this.size});
-
-  final Color color;
-  final double size;
+class _GooglePainter extends CustomPainter {
+  const _GooglePainter();
 
   @override
-  Widget build(BuildContext context) => IgnorePointer(
-    child: Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: color.withValues(alpha: 0.34),
-      ),
-    ),
-  );
+  void paint(Canvas canvas, Size size) {
+    final stroke = size.width * 0.22;
+    final rect = Rect.fromLTWH(
+      stroke / 2,
+      stroke / 2,
+      size.width - stroke,
+      size.height - stroke,
+    );
+    Paint arc(Color color) => Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke;
+    double rad(double degrees) => degrees * math.pi / 180;
+
+    canvas
+      ..drawArc(rect, rad(-40), rad(-100), false, arc(const Color(0xFFEA4335)))
+      ..drawArc(rect, rad(-140), rad(-90), false, arc(const Color(0xFFFBBC05)))
+      ..drawArc(rect, rad(-230), rad(-95), false, arc(const Color(0xFF34A853)))
+      ..drawArc(rect, rad(-325), rad(-35), false, arc(const Color(0xFF4285F4)))
+      ..drawRect(
+        Rect.fromLTWH(
+          size.width / 2,
+          size.height / 2 - stroke / 2,
+          size.width / 2 - stroke * 0.1,
+          stroke,
+        ),
+        Paint()..color = const Color(0xFF4285F4),
+      );
+  }
+
+  @override
+  bool shouldRepaint(_GooglePainter oldDelegate) => false;
 }
