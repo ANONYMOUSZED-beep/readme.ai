@@ -8,6 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/state_message.dart';
+import '../../activity/application/activity_providers.dart';
+import '../../activity/domain/activity_summary.dart';
 import '../../explanation/presentation/explanation_sheet.dart';
 import '../application/last_opened_book_controller.dart';
 import '../application/reader_controller.dart';
@@ -25,6 +27,9 @@ import 'widgets/reader_settings_sheet.dart';
 /// Characters read per minute for time estimates (roughly 230 words/min).
 const int _charsPerMinute = 1200;
 
+/// Mirrors the backend's cap on reading time credited by a single save.
+const int _maxSecondsPerSave = 15 * 60;
+
 /// Immersive, API-backed reader with contextual AI assistance.
 ///
 /// The page fills the screen; the top and bottom chrome slide away while the
@@ -38,8 +43,10 @@ class ReaderScreen extends ConsumerStatefulWidget {
   ConsumerState<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-class _ReaderScreenState extends ConsumerState<ReaderScreen> {
+class _ReaderScreenState extends ConsumerState<ReaderScreen>
+    with WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
+  // Measures reading time between saves; paused while the app is hidden.
   final Stopwatch _sessionStopwatch = Stopwatch()..start();
   // Scroll-driven state lives in notifiers so scrolling never rebuilds the
   // (potentially very long) book text.
@@ -51,21 +58,47 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   int _characterCount = 0;
   String? _text;
 
+  // Today's activity when the book opened, to notice the goal being reached.
+  ActivitySummary? _activityAtOpen;
+  int _secondsReadThisSession = 0;
+  bool _celebrated = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Providers can't be modified mid-build; record the visit right after.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         ref.read(lastOpenedBookProvider.notifier).open(widget.bookId);
       }
     });
+    ref.listenManual(activitySummaryProvider, (_, next) {
+      _activityAtOpen ??= next.value;
+    }, fireImmediately: true);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _sessionStopwatch.start();
+      case AppLifecycleState.hidden || AppLifecycleState.paused:
+        // Save on the way out and stop counting time the reader isn't here.
+        if (_sessionStopwatch.isRunning) {
+          _persistPosition();
+          _sessionStopwatch.stop();
+        }
+      case AppLifecycleState.inactive || AppLifecycleState.detached:
+        break;
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _saveDebounce?.cancel();
-    _persistPosition();
+    _persistPosition(endSession: true);
     _scrollController.dispose();
     _progress.dispose();
     _chromeVisible.dispose();
@@ -101,23 +134,62 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     return false;
   }
 
-  void _persistPosition() {
+  /// Save the position and the reading time since the last save.
+  ///
+  /// [endSession] also refreshes today's activity (used when leaving).
+  void _persistPosition({bool endSession = false}) {
     if (!_scrollController.hasClients || _characterCount == 0) return;
     final fraction = _scrollFraction;
     final seconds = _sessionStopwatch.elapsed.inSeconds;
-    _sessionStopwatch
-      ..reset()
-      ..start();
+    // Keeps running (or stopped) as it was; only the lap restarts.
+    _sessionStopwatch.reset();
+    final controller = ref.read(readerControllerProvider);
+    final save = endSession ? controller.endSession : controller.saveProgress;
     unawaited(
-      ref
-          .read(readerControllerProvider)
-          .saveProgress(
-            widget.bookId,
-            currentPosition: _offsetFromFraction(fraction).toString(),
-            progressPercentage: fraction * 100,
-            readingTimeSeconds: seconds,
-          ),
+      save(
+        widget.bookId,
+        currentPosition: _offsetFromFraction(fraction).toString(),
+        progressPercentage: fraction * 100,
+        readingTimeSeconds: seconds,
+      ),
     );
+    if (!endSession) _noteReading(seconds);
+  }
+
+  /// Celebrate, once, when this session carries today's goal over the line.
+  void _noteReading(int seconds) {
+    _secondsReadThisSession += math.min(seconds, _maxSecondsPerSave);
+    final before = _activityAtOpen;
+    if (_celebrated || before == null || before.goalMetToday || !mounted) {
+      return;
+    }
+    final goalSeconds = before.dailyGoalMinutes * 60;
+    if (before.todayReadingSeconds + _secondsReadThisSession < goalSeconds) {
+      return;
+    }
+    _celebrated = true;
+    final streak = before.currentStreak + 1;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              // The snackbar is inverted, so use the deeper flame in both themes.
+              const Icon(
+                Icons.local_fire_department_rounded,
+                color: AppColors.flame,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Daily goal reached · $streak-day streak. Keep going!',
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
   }
 
   void _restorePosition(double percentage) {

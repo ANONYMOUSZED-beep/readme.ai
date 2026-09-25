@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +14,7 @@ import '../../reader/domain/reading_progress.dart';
 import '../application/library_controller.dart';
 import '../application/library_providers.dart';
 import '../domain/book.dart';
+import '../domain/book_processing.dart';
 import '../domain/book_status.dart';
 import 'widgets/book_card.dart';
 import 'widgets/book_cover.dart';
@@ -44,10 +47,11 @@ class BookDetailScreen extends ConsumerWidget {
       ),
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 280),
+        // A book already on screen stays there while it refreshes.
         child: switch (bookState) {
-          AsyncData(:final value) => _BookDetailView(
-            key: ValueKey(value.id),
-            book: value,
+          AsyncValue(value: final book?) => _BookDetailView(
+            key: ValueKey(book.id),
+            book: book,
           ),
           AsyncError() => StateMessage(
             icon: Icons.menu_book_outlined,
@@ -118,6 +122,7 @@ class _BookDetailView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final progress = ref.watch(readingProgressProvider(book.id)).value;
+    final processing = ref.watch(bookProcessingProvider(book.id)).value;
     final tint = coverStyleFor(book.title).base;
     final topInset = MediaQuery.paddingOf(context).top + kToolbarHeight;
 
@@ -131,7 +136,11 @@ class _BookDetailView extends ConsumerWidget {
             child: BookCover(book: book, heroTag: 'book-cover-${book.id}'),
           ),
         );
-        final details = _BookDetails(book: book, progress: progress);
+        final details = _BookDetails(
+          book: book,
+          progress: progress,
+          processing: processing,
+        );
 
         return DecoratedBox(
           decoration: BoxDecoration(
@@ -150,6 +159,7 @@ class _BookDetailView extends ConsumerWidget {
             ),
           ),
           child: SingleChildScrollView(
+            key: const PageStorageKey('book-detail'),
             padding: EdgeInsets.fromLTRB(
               wide ? 48 : 20,
               topInset + 12,
@@ -180,11 +190,50 @@ class _BookDetailView extends ConsumerWidget {
   }
 }
 
+/// While a book is being prepared, re-checks it until it's ready.
+class _PreparingPoller extends ConsumerStatefulWidget {
+  const _PreparingPoller({required this.bookId});
+
+  final String bookId;
+
+  @override
+  ConsumerState<_PreparingPoller> createState() => _PreparingPollerState();
+}
+
+class _PreparingPollerState extends ConsumerState<_PreparingPoller> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(
+      LibraryController.pollInterval,
+      (_) => ref
+        ..invalidate(bookProvider(widget.bookId))
+        ..invalidate(bookProcessingProvider(widget.bookId)),
+    );
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
 class _BookDetails extends StatelessWidget {
-  const _BookDetails({required this.book, required this.progress});
+  const _BookDetails({
+    required this.book,
+    required this.progress,
+    required this.processing,
+  });
 
   final Book book;
   final ReadingProgress? progress;
+  final BookProcessing? processing;
 
   @override
   Widget build(BuildContext context) {
@@ -226,26 +275,38 @@ class _BookDetails extends StatelessWidget {
               textAlign: align,
             ),
             const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: () => context.goNamed(
-                  AppRoutes.readerName,
-                  pathParameters: {'bookId': book.id},
-                ),
-                icon: Icon(
-                  started && !finished
-                      ? Icons.play_arrow_rounded
-                      : Icons.menu_book_rounded,
-                ),
-                label: Text(ctaLabel),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(56),
+            if (book.status.isPreparing) ...[
+              _PreparingPoller(bookId: book.id),
+              const _PreparingButton(),
+              const SizedBox(height: 10),
+              Text(
+                'Usually takes a few seconds — feel free to leave this page.',
+                style: theme.textTheme.bodySmall,
+                textAlign: align,
+              ),
+            ] else if (book.status == BookStatus.failed)
+              _ProcessingFailure(bookId: book.id, error: processing?.error)
+            else
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () => context.goNamed(
+                    AppRoutes.readerName,
+                    pathParameters: {'bookId': book.id},
+                  ),
+                  icon: Icon(
+                    started && !finished
+                        ? Icons.play_arrow_rounded
+                        : Icons.menu_book_rounded,
+                  ),
+                  label: Text(ctaLabel),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(56),
+                  ),
                 ),
               ),
-            ),
             const SizedBox(height: 20),
-            _StatsRow(book: book),
+            _StatsRow(book: book, processing: processing),
             if (progress != null && started) ...[
               const SizedBox(height: 16),
               _ProgressCard(progress: progress!),
@@ -293,7 +354,7 @@ class _StatusPill extends StatelessWidget {
       BookStatus.failed => (
         theme.colorScheme.errorContainer,
         theme.colorScheme.onErrorContainer,
-        "Processing failed — this file can't be read yet",
+        "Couldn't prepare this book",
       ),
       BookStatus.processing || BookStatus.uploading => (
         AppColors.warningSoft,
@@ -330,18 +391,27 @@ class _StatusPill extends StatelessWidget {
 }
 
 class _StatsRow extends StatelessWidget {
-  const _StatsRow({required this.book});
+  const _StatsRow({required this.book, required this.processing});
 
   final Book book;
+  final BookProcessing? processing;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
+    final words = processing?.wordCount ?? 0;
+    final minutes = processing?.estimatedReadingMinutes;
     final stats = [
       ('Format', fileKindOf(book)),
-      (l10n.fieldFileSize, formatBytes(book.fileSize)),
-      if (book.totalPages != null) (l10n.fieldPages, '${book.totalPages}'),
+      if (words > 0)
+        ('Words', _compactCount(words))
+      else
+        (l10n.fieldFileSize, formatBytes(book.fileSize)),
+      if (minutes != null)
+        ('Read time', _readingTime(minutes * 60))
+      else if (book.totalPages != null)
+        (l10n.fieldPages, '${book.totalPages}'),
       (l10n.fieldUploadedAt, _friendlyDate(book.uploadedAt)),
     ];
     return Container(
@@ -373,6 +443,128 @@ class _StatsRow extends StatelessWidget {
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PreparingButton extends StatelessWidget {
+  const _PreparingButton();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      width: double.infinity,
+      child: FilledButton.icon(
+        onPressed: null,
+        icon: SizedBox.square(
+          dimension: 18,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        label: const Text('Preparing your book…'),
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
+      ),
+    );
+  }
+}
+
+/// Why a book couldn't be prepared, with a retry when trying again can help.
+class _ProcessingFailure extends ConsumerStatefulWidget {
+  const _ProcessingFailure({required this.bookId, required this.error});
+
+  final String bookId;
+  final ProcessingError? error;
+
+  @override
+  ConsumerState<_ProcessingFailure> createState() => _ProcessingFailureState();
+}
+
+class _ProcessingFailureState extends ConsumerState<_ProcessingFailure> {
+  bool _retrying = false;
+
+  Future<void> _retry() async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _retrying = true);
+    try {
+      await ref
+          .read(libraryControllerProvider.notifier)
+          .retryProcessing(widget.bookId);
+    } on Object {
+      messenger.showSnackBar(
+        const SnackBar(content: Text("Couldn't retry. Please try again.")),
+      );
+    } finally {
+      if (mounted) setState(() => _retrying = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final error = widget.error;
+    final (title, message) = switch (error) {
+      ProcessingError.unsupportedFormat => (
+        'This format is coming soon',
+        'PDF and EPUB reading is on the way. For now, upload a .txt or '
+            '.md version to read it here.',
+      ),
+      ProcessingError.emptyDocument => (
+        'No readable text found',
+        'This file has no text to read — it may be scanned images.',
+      ),
+      ProcessingError.tooLarge => (
+        'This file is too large',
+        'Try splitting it into smaller parts and uploading those.',
+      ),
+      ProcessingError.malformedFile => (
+        "This file couldn't be read",
+        'It may be damaged. Try exporting it again and re-uploading.',
+      ),
+      _ => (
+        'Something went wrong',
+        'Preparing this book was interrupted. Trying again usually works.',
+      ),
+    };
+    final retryable = error == null || error.isRetryable;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: theme.textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text(
+            message,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          if (retryable) ...[
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: _retrying ? null : _retry,
+              icon: _retrying
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh_rounded),
+              label: const Text('Try again'),
+              style: OutlinedButton.styleFrom(minimumSize: const Size(48, 44)),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -508,6 +700,18 @@ String _friendlyDate(DateTime date) {
   final local = date.toLocal();
   final base = '${months[local.month - 1]} ${local.day}';
   return local.year != DateTime.now().year ? '$base, ${local.year}' : base;
+}
+
+/// Compact count, e.g. `842`, `12.4k`, `672k`, `1.2M`.
+String _compactCount(int value) {
+  if (value < 1000) return '$value';
+  if (value < 1000000) {
+    final thousands = value / 1000;
+    return thousands < 100
+        ? '${thousands.toStringAsFixed(1).replaceAll('.0', '')}k'
+        : '${thousands.round()}k';
+  }
+  return '${(value / 1000000).toStringAsFixed(1).replaceAll('.0', '')}M';
 }
 
 String _readingTime(int seconds) {

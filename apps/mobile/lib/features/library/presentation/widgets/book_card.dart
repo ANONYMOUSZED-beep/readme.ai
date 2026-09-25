@@ -28,7 +28,13 @@ class BookCard extends StatelessWidget {
           children: [
             AspectRatio(
               aspectRatio: BookCover.aspectRatio,
-              child: BookCover(book: book, heroTag: 'book-cover-${book.id}'),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  BookCover(book: book, heroTag: 'book-cover-${book.id}'),
+                  if (book.status.isPreparing) const _PreparingOverlay(),
+                ],
+              ),
             ),
             const SizedBox(height: 10),
             Text(
@@ -46,9 +52,13 @@ class BookCard extends StatelessWidget {
                 ],
                 Expanded(
                   child: Text(
-                    book.status == BookStatus.ready
-                        ? '${fileKindOf(book)} · ${formatBytes(book.fileSize)}'
-                        : book.status.label,
+                    switch (book.status) {
+                      BookStatus.ready =>
+                        '${fileKindOf(book)} · ${formatBytes(book.fileSize)}',
+                      BookStatus.uploading ||
+                      BookStatus.processing => 'Preparing to read…',
+                      _ => book.status.label,
+                    },
                     style: theme.textTheme.bodySmall,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -57,6 +67,30 @@ class BookCard extends StatelessWidget {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Veils a cover while the book is prepared for reading.
+class _PreparingOverlay extends StatelessWidget {
+  const _PreparingOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.ink.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: const Center(
+        child: SizedBox.square(
+          dimension: 26,
+          child: CircularProgressIndicator(
+            strokeWidth: 2.5,
+            color: Colors.white,
+          ),
         ),
       ),
     );

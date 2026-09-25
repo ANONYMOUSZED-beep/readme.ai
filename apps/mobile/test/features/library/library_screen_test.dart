@@ -126,7 +126,9 @@ void main() {
 
     await pumpApp(tester, authRepository: auth, libraryRepository: library);
 
-    // Open the detail screen.
+    // Open the detail screen (the shelf sits below today's card).
+    await tester.ensureVisible(find.byType(BookCard));
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(BookCard));
     await tester.pumpAndSettle();
     expect(find.byType(BookDetailScreen), findsOneWidget);

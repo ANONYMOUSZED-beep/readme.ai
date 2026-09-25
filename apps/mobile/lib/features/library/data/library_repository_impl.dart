@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../../core/files/picked_book.dart';
 import '../domain/book.dart';
+import '../domain/book_processing.dart';
 import '../domain/library_repository.dart';
 import 'book_dto.dart';
 
@@ -31,15 +32,52 @@ class LibraryRepositoryImpl implements LibraryRepository {
   }
 
   @override
-  Future<Book> uploadBook(PickedBook file) async {
+  Future<Book> uploadBook(
+    PickedBook file, {
+    void Function(double progress)? onProgress,
+  }) async {
+    final mimeType = file.mimeType;
     final formData = FormData.fromMap({
-      'file': MultipartFile.fromBytes(file.bytes, filename: file.filename),
+      'file': MultipartFile.fromBytes(
+        file.bytes,
+        filename: file.filename,
+        contentType: mimeType == null ? null : DioMediaType.parse(mimeType),
+      ),
     });
     final response = await _dio.post<Map<String, dynamic>>(
       _basePath,
       data: formData,
+      onSendProgress: onProgress == null
+          ? null
+          : (sent, total) {
+              if (total > 0) onProgress((sent / total).clamp(0.0, 1.0));
+            },
     );
     return BookDto.fromJson(response.data!).toDomain();
+  }
+
+  @override
+  Future<BookProcessing?> getProcessing(String id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '$_basePath/$id/processing',
+      );
+      final data = response.data!;
+      final errorCode = data['error_code'] as String?;
+      return BookProcessing(
+        wordCount: data['word_count'] as int? ?? 0,
+        estimatedReadingMinutes: data['estimated_reading_minutes'] as int?,
+        error: errorCode == null ? null : ProcessingError.fromApi(errorCode),
+      );
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> retryProcessing(String id) async {
+    await _dio.post<void>('$_basePath/$id/processing');
   }
 
   @override

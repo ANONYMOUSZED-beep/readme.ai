@@ -27,6 +27,10 @@ abstract final class AppColors {
   static const Color nightInkSoft = Color(0xFFA9A398);
   static const Color nightHairline = Color(0xFF302E2A);
 
+  // Streaks and daily goals.
+  static const Color flame = Color(0xFFE0592A);
+  static const Color flameDark = Color(0xFFFF8A5C);
+
   // Semantic accents.
   static const Color clay = Color(0xFFB0562E);
   static const Color highlight = Color(0xFFF4D784);

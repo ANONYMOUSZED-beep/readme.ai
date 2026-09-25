@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/skeleton.dart';
+import '../../activity/application/activity_providers.dart';
 import '../application/explanation_providers.dart';
 import '../domain/explanation.dart';
 import '../domain/prerequisite.dart';
@@ -23,6 +24,13 @@ class ExplanationSheet extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final state = ref.watch(explanationProvider(args));
+
+    // A successful explanation counts toward today's tasks.
+    ref.listen(explanationProvider(args), (previous, next) {
+      if (next is AsyncData && previous is! AsyncData) {
+        ref.invalidate(activitySummaryProvider);
+      }
+    });
 
     return SafeArea(
       child: ConstrainedBox(

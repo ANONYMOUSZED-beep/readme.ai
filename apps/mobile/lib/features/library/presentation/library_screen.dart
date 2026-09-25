@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -11,6 +12,7 @@ import '../../../core/theme/theme_mode_controller.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/skeleton.dart';
 import '../../../shared/widgets/state_message.dart';
+import '../../activity/presentation/today_card.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../auth/application/auth_providers.dart';
 import '../../auth/domain/auth_user.dart';
@@ -31,12 +33,14 @@ class LibraryScreen extends ConsumerStatefulWidget {
 
 class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   final TextEditingController _searchController = TextEditingController();
+  final ValueNotifier<double> _uploadProgress = ValueNotifier(0);
   String _query = '';
   String? _uploadingName;
 
   @override
   void dispose() {
     _searchController.dispose();
+    _uploadProgress.dispose();
     super.dispose();
   }
 
@@ -139,7 +143,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         ? null
         : SliverPadding(
             padding: EdgeInsets.fromLTRB(side, 20, side, 0),
-            sliver: SliverToBoxAdapter(child: _UploadingBanner(uploading)),
+            sliver: SliverToBoxAdapter(
+              child: _UploadingBanner(
+                filename: uploading,
+                progress: _uploadProgress,
+              ),
+            ),
           );
 
     if (books.isEmpty) {
@@ -167,6 +176,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final continueBook = normalized.isEmpty
         ? books.where((book) => book.id == lastOpenedId).firstOrNull
         : null;
+    void openReader(Book book) => context.goNamed(
+      AppRoutes.readerName,
+      pathParameters: {'bookId': book.id},
+    );
 
     return [
       SliverPadding(
@@ -194,21 +207,20 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         ),
       ),
       ?banner,
-      if (continueBook != null)
+      if (normalized.isEmpty)
         SliverPadding(
           padding: EdgeInsets.fromLTRB(side, 24, side, 0),
           sliver: SliverToBoxAdapter(
-            child: Align(
-              alignment: AlignmentDirectional.centerStart,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 560),
-                child: _ContinueReadingCard(
-                  book: continueBook,
-                  onContinue: () => context.goNamed(
-                    AppRoutes.readerName,
-                    pathParameters: {'bookId': continueBook.id},
-                  ),
-                ),
+            child: _Highlights(
+              width: contentWidth,
+              continueBook: continueBook,
+              onContinue: continueBook == null
+                  ? null
+                  : () => openReader(continueBook),
+              today: TodayCard(
+                onRead: continueBook == null
+                    ? null
+                    : () => openReader(continueBook),
               ),
             ),
           ),
@@ -258,9 +270,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final picked = await ref.read(filePickerProvider).pickBook();
     if (picked == null || !mounted) return;
+    _uploadProgress.value = 0;
     setState(() => _uploadingName = picked.filename);
     try {
-      await ref.read(libraryControllerProvider.notifier).uploadBook(picked);
+      await ref
+          .read(libraryControllerProvider.notifier)
+          .uploadBook(
+            picked,
+            onProgress: (progress) => _uploadProgress.value = progress,
+          );
     } on Object {
       messenger
         ..hideCurrentSnackBar()
@@ -268,6 +286,61 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     } finally {
       if (mounted) setState(() => _uploadingName = null);
     }
+  }
+}
+
+/// Continue reading and today's card: side by side when there's room.
+class _Highlights extends StatelessWidget {
+  const _Highlights({
+    required this.width,
+    required this.continueBook,
+    required this.onContinue,
+    required this.today,
+  });
+
+  final double width;
+  final Book? continueBook;
+  final VoidCallback? onContinue;
+  final Widget today;
+
+  @override
+  Widget build(BuildContext context) {
+    final book = continueBook;
+    final onContinue = this.onContinue;
+    if (book != null && onContinue != null && width >= 760) {
+      // Equal-height cards; the continue card grows into a larger layout.
+      return IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: _ContinueReadingCard(
+                book: book,
+                onContinue: onContinue,
+                expanded: true,
+              ),
+            ),
+            const SizedBox(width: 18),
+            Expanded(child: today),
+          ],
+        ),
+      );
+    }
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Column(
+          children: [
+            if (book != null && onContinue != null) ...[
+              _ContinueReadingCard(book: book, onContinue: onContinue),
+              const SizedBox(height: 14),
+            ],
+            today,
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -478,10 +551,17 @@ class _AccountSheet extends ConsumerWidget {
 }
 
 class _ContinueReadingCard extends ConsumerWidget {
-  const _ContinueReadingCard({required this.book, required this.onContinue});
+  const _ContinueReadingCard({
+    required this.book,
+    required this.onContinue,
+    this.expanded = false,
+  });
 
   final Book book;
   final VoidCallback onContinue;
+
+  /// A roomier layout (larger cover, explicit button) for wide screens.
+  final bool expanded;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -491,6 +571,91 @@ class _ContinueReadingCard extends ConsumerWidget {
       0.0,
       1.0,
     );
+
+    final progressBar = Row(
+      children: [
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: LinearProgressIndicator(
+              value: fraction,
+              minHeight: 4,
+              color: theme.colorScheme.tertiary,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          '${(fraction * 100).round()}%',
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+    final label = Text(
+      'CONTINUE READING',
+      style: theme.textTheme.labelSmall?.copyWith(
+        color: theme.colorScheme.tertiary,
+        letterSpacing: 1.1,
+      ),
+    );
+
+    if (expanded) {
+      return Material(
+        color: theme.colorScheme.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(22),
+          side: BorderSide(color: theme.colorScheme.outlineVariant),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onContinue,
+          child: Padding(
+            padding: const EdgeInsets.all(22),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 120,
+                  child: AspectRatio(
+                    aspectRatio: BookCover.aspectRatio,
+                    child: BookCover(book: book),
+                  ),
+                ),
+                const SizedBox(width: 24),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      label,
+                      const SizedBox(height: 6),
+                      Text(
+                        book.title,
+                        style: theme.textTheme.headlineSmall,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 16),
+                      progressBar,
+                      const SizedBox(height: 20),
+                      FilledButton.icon(
+                        onPressed: onContinue,
+                        icon: const Icon(Icons.play_arrow_rounded),
+                        label: const Text('Continue reading'),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(48, 46),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return Material(
       color: theme.colorScheme.surface,
@@ -517,13 +682,7 @@ class _ContinueReadingCard extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'CONTINUE READING',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.tertiary,
-                        letterSpacing: 1.1,
-                      ),
-                    ),
+                    label,
                     const SizedBox(height: 4),
                     Text(
                       book.title,
@@ -532,27 +691,7 @@ class _ContinueReadingCard extends ConsumerWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(99),
-                            child: LinearProgressIndicator(
-                              value: fraction,
-                              minHeight: 4,
-                              color: theme.colorScheme.tertiary,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text(
-                          '${(fraction * 100).round()}%',
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
+                    progressBar,
                   ],
                 ),
               ),
@@ -578,54 +717,65 @@ class _ContinueReadingCard extends ConsumerWidget {
 }
 
 class _UploadingBanner extends StatelessWidget {
-  const _UploadingBanner(this.filename);
+  const _UploadingBanner({required this.filename, required this.progress});
 
   final String filename;
+  final ValueListenable<double> progress;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final ink = theme.colorScheme.onTertiaryContainer;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
       decoration: BoxDecoration(
         color: theme.colorScheme.tertiaryContainer,
         borderRadius: BorderRadius.circular(18),
       ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.2,
-              color: theme.colorScheme.tertiary,
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Uploading $filename',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: theme.colorScheme.onTertiaryContainer,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  'Preparing it for reading…',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onTertiaryContainer.withValues(
-                      alpha: 0.75,
+      child: ValueListenableBuilder<double>(
+        valueListenable: progress,
+        builder: (context, value, _) {
+          final sent = value >= 1;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.upload_rounded, size: 20, color: ink),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Uploading $filename',
+                      style: theme.textTheme.titleSmall?.copyWith(color: ink),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  const SizedBox(width: 10),
+                  Text(
+                    sent ? 'Finishing…' : '${(value * 100).round()}%',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: ink.withValues(alpha: 0.8),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(99),
+                child: LinearProgressIndicator(
+                  // Indeterminate while the server stores the sent file.
+                  value: sent ? null : value,
+                  minHeight: 4,
+                  color: theme.colorScheme.tertiary,
+                  backgroundColor: theme.colorScheme.surface.withValues(
+                    alpha: 0.7,
+                  ),
                 ),
-              ],
-            ),
-          ),
-        ],
+              ),
+            ],
+          );
+        },
       ),
     );
   }

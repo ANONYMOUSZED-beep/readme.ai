@@ -6,6 +6,7 @@ import '../config/app_config.dart';
 import '../logging/app_logger.dart';
 import 'auth_interceptor.dart';
 import 'logging_interceptor.dart';
+import 'timezone_interceptor.dart';
 
 /// Default network timeout applied to connect and receive operations.
 const _defaultTimeout = Duration(seconds: 15);
@@ -31,6 +32,7 @@ final dioProvider = Provider<Dio>((ref) {
 
   dio.interceptors.addAll([
     AuthInterceptor(() => ref.read(authRepositoryProvider).idToken()),
+    TimezoneInterceptor(),
     LoggingInterceptor(logger),
   ]);
   return dio;
