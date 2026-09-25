@@ -3,6 +3,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'picked_book.dart';
 
+/// Best-effort MIME type for the document formats accepted by the picker.
+String bookMimeType(String filename) {
+  final normalized = filename.toLowerCase();
+  if (normalized.endsWith('.pdf')) return 'application/pdf';
+  if (normalized.endsWith('.epub')) return 'application/epub+zip';
+  if (normalized.endsWith('.txt')) return 'text/plain';
+  if (normalized.endsWith('.md') || normalized.endsWith('.markdown')) {
+    return 'text/markdown';
+  }
+  return 'application/octet-stream';
+}
+
 /// Abstraction over the platform file picker so the upload flow can be tested
 /// without invoking native plugins.
 abstract interface class FilePickerService {
@@ -26,7 +38,11 @@ class FilePickerServiceImpl implements FilePickerService {
     if (file == null || bytes == null) {
       return null;
     }
-    return PickedBook(filename: file.name, bytes: bytes);
+    return PickedBook(
+      filename: file.name,
+      bytes: bytes,
+      mimeType: bookMimeType(file.name),
+    );
   }
 }
 

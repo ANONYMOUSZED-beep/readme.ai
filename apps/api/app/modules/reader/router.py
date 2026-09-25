@@ -7,6 +7,7 @@ routes require authentication and operate only on the caller's own books.
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Query, status
 
@@ -20,6 +21,8 @@ from app.modules.reader.schemas import (
     BookmarkResponse,
     ChapterResponse,
     CreateBookmarkRequest,
+    DocumentElementResponse,
+    DocumentElementWindowResponse,
     ReadingProgressResponse,
     RecentReadingListResponse,
     UpdateProgressRequest,
@@ -49,6 +52,11 @@ async def list_recent(
     )
 
 
+#: Default window span when a client asks for elements without a range. Matches
+#: the client's chunk size, so the common request is one chunk.
+DEFAULT_WINDOW_SPAN = 20_000
+
+
 @router.get(
     "/{book_id}/content",
     response_model=BookContentResponse,
@@ -70,6 +78,55 @@ async def get_content(
         chapters=[
             ChapterResponse(title=title, start_offset=start)
             for title, start in view.chapters
+        ],
+    )
+
+
+@router.get(
+    "/{book_id}/content/elements",
+    response_model=DocumentElementWindowResponse,
+    summary="Get a window of structured document elements",
+)
+async def get_content_elements(
+    book_id: uuid.UUID,
+    user: CurrentUser,
+    service: ReaderServiceDep,
+    start: Annotated[
+        int,
+        Query(ge=0, description="Canonical start offset of the window."),
+    ] = 0,
+    end: Annotated[
+        int,
+        Query(ge=1, description="Canonical end offset of the window (exclusive)."),
+    ] = DEFAULT_WINDOW_SPAN,
+) -> DocumentElementWindowResponse:
+    """Return the document elements covering a canonical offset range.
+
+    A pure read: it never writes progress, timestamps, metadata, or cache state.
+    The requested span is clamped and the element count capped, so a response is
+    always bounded; ``truncated`` reports when the cap applied.
+    """
+    window = await service.get_elements(user.id, book_id, start=start, end=end)
+    return DocumentElementWindowResponse(
+        book_id=book_id,
+        start=window.start,
+        end=window.end,
+        character_count=window.character_count,
+        truncated=window.truncated,
+        elements=[
+            DocumentElementResponse(
+                id=element.element_id,
+                parent_id=element.parent_id,
+                type=element.element_type,
+                order_index=element.order_index,
+                sequence=element.sequence,
+                start_offset=element.start_offset,
+                end_offset=element.end_offset,
+                page_number=element.page_number,
+                payload=element.payload,
+                text=element.text,
+            )
+            for element in window.elements
         ],
     )
 

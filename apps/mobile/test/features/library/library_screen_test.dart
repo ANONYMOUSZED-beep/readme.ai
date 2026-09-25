@@ -123,6 +123,58 @@ void main() {
     expect(find.byType(BookCard), findsOneWidget);
   });
 
+  testWidgets('failed documents explain recovery and cannot be opened', (
+    tester,
+  ) async {
+    final auth = FakeAuthRepository(initialUser: _signedIn);
+    addTearDown(auth.dispose);
+    final library = FakeLibraryRepository(
+      initial: [_book(status: BookStatus.failed)],
+    );
+
+    await pumpApp(tester, authRepository: auth, libraryRepository: library);
+    // The book grid starts below the day's highlights.
+    await tester.ensureVisible(find.byType(BookCard));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(BookCard));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(BookDetailScreen), findsOneWidget);
+    // Without a recorded reason the panel offers a retry, never "Read".
+    expect(find.text('Something went wrong'), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
+    expect(find.text('Start reading'), findsNothing);
+  });
+
+  testWidgets('library remains stable at phone and desktop widths', (
+    tester,
+  ) async {
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final auth = FakeAuthRepository(initialUser: _signedIn);
+    addTearDown(auth.dispose);
+    final library = FakeLibraryRepository(
+      initial: [
+        _book(id: 'b1'),
+        _book(id: 'b2', title: 'Designing Data-Intensive Applications'),
+        _book(id: 'b3', title: 'The Pragmatic Programmer'),
+      ],
+    );
+
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    await pumpApp(tester, authRepository: auth, libraryRepository: library);
+    expect(tester.takeException(), isNull);
+    expect(find.byType(BookCard), findsWidgets);
+
+    tester.view.physicalSize = const Size(1440, 1000);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.byType(BookCard), findsNWidgets(3));
+  });
+
   testWidgets('deleting a book removes it via the detail screen', (
     tester,
   ) async {

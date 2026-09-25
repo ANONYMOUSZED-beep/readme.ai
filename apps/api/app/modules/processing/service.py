@@ -1,9 +1,11 @@
 """Processing service — orchestrates the processing pipeline.
 
-Pipeline: resolve owned book -> mark PROCESSING -> read bytes -> select
-processor -> produce structured document (in a worker thread) -> persist ->
-COMPLETED / FAILED. The library book's status mirrors the outcome
-(PROCESSING -> READY | FAILED) so clients can show it without a second call.
+Pipeline: resolve owned book -> mark PROCESSING -> read bytes -> select a parser
+from the registry -> parse into the Document Model -> persist -> COMPLETED /
+FAILED. The engine depends only on ``ParserRegistry`` and the ``DocumentParser``
+interface, never on a concrete parser or a format-specific exception.
+The library book's status mirrors the outcome (PROCESSING -> READY | FAILED)
+so clients can show it without a second call.
 
 All failures are recorded as structured errors; processing never raises to the
 caller for an expected failure (unsupported/malformed/too-large), so triggering
@@ -22,12 +24,16 @@ from app.core.storage.base import StorageService
 from app.modules.library.enums import BookStatus
 from app.modules.library.models import Book
 from app.modules.library.service import BookService
-from app.modules.processing.builder import PARAGRAPH_SEPARATOR
-from app.modules.processing.document import StructuredDocument
+from app.modules.processing.document import CoverImage
 from app.modules.processing.enums import ProcessingErrorCode, ProcessingStatus
 from app.modules.processing.models import ProcessedBook
+from app.modules.processing.parsers import (
+    ParseRequest,
+    ParserError,
+    ParseResult,
+    ParserRegistry,
+)
 from app.modules.processing.processors.base import ProcessingError
-from app.modules.processing.registry import ProcessorRegistry
 from app.modules.processing.repository import ProcessingRepository
 
 logger = get_logger(__name__)
@@ -60,7 +66,7 @@ class ProcessingService:
         repository: ProcessingRepository,
         book_service: BookService,
         storage: StorageService,
-        registry: ProcessorRegistry,
+        registry: ParserRegistry,
         *,
         max_document_bytes: int,
     ) -> None:
@@ -109,8 +115,25 @@ class ProcessingService:
             raise
 
         try:
-            document, processor_name = await self._produce(
+            result = await self._parse(
                 storage_key=storage_key, mime_type=mime_type, filename=filename
+            )
+        except ParserError as error:
+            if error.processing_code is ProcessingErrorCode.INTERNAL:
+                # A parser crash carries internal detail (paths, library
+                # messages): keep it in the logs, never in the API response.
+                logger.error(
+                    "processing.parser_failed",
+                    extra={"book_id": str(book_id), "error": error.message},
+                )
+                return await self._record_failure(
+                    user_id,
+                    book_id,
+                    ProcessingErrorCode.INTERNAL,
+                    _INTERNAL_ERROR_MESSAGE,
+                )
+            return await self._record_failure(
+                user_id, book_id, error.processing_code, error.message
             )
         except ProcessingError as error:
             return await self._record_failure(
@@ -123,9 +146,15 @@ class ProcessingService:
             )
 
         try:
-            await self._repository.save_completed(record, document, processor_name)
+            await self._repository.save_completed(
+                record,
+                document=result.document,
+                text=result.canonical_text,
+                metadata=result.metadata,
+                parser_name=result.parser_name,
+            )
             self._book_service.apply_processing_state(
-                book, BookStatus.READY, total_pages=document.metadata.page_count
+                book, BookStatus.READY, total_pages=result.metadata.page_count
             )
             await self._repository.commit()
         except Exception:
@@ -137,53 +166,54 @@ class ProcessingService:
                 user_id, book_id, ProcessingErrorCode.INTERNAL, _INTERNAL_ERROR_MESSAGE
             )
 
-        if await self._store_cover(book, document, book_id):
+        if await self._store_cover(book, result.cover, book_id):
             return record
         # The rollback expired loaded rows; re-read the committed record.
         refreshed = await self._repository.get_by_book_id(book_id)
         return refreshed if refreshed is not None else record
 
     async def _store_cover(
-        self, book: Book, document: StructuredDocument, book_id: uuid.UUID
+        self, book: Book, cover: CoverImage | None, book_id: uuid.UUID
     ) -> bool:
         """Save (or clear) the cover. Best effort: never fails the book.
 
         Returns ``False`` when it failed and the session was rolled back.
         """
-        cover = document.cover.data if document.cover else None
         try:
-            await self._book_service.replace_cover(book, cover)
+            await self._book_service.replace_cover(book, cover.data if cover else None)
         except Exception:
             logger.exception("processing.cover_failed", extra={"book_id": str(book_id)})
             await self._repository.rollback()
             return False
         return True
 
-    async def _produce(
+    async def _parse(
         self,
         *,
         storage_key: str,
         mime_type: str,
         filename: str,
-    ) -> tuple[StructuredDocument, str]:
+    ) -> ParseResult:
         data = await self._storage.read(storage_key)
         if len(data) > self._max_document_bytes:
             raise ProcessingError(
                 ProcessingErrorCode.TOO_LARGE,
                 "The document is too large to process.",
             )
-        processor = self._registry.select(mime_type=mime_type, filename=filename)
-        if processor is None:
-            raise ProcessingError(
-                ProcessingErrorCode.UNSUPPORTED_FORMAT,
-                f"No processor supports '{mime_type}'.",
-            )
+        # The engine knows only the registry and the parser interface; which
+        # parser runs, and which format it understands, is not its concern.
+        parser = self._registry.require(mime_type=mime_type, filename=filename)
         # Parsing is CPU-bound; keep it off the event loop so one large book
         # cannot stall every other request served by this process.
-        document = await asyncio.to_thread(
-            processor.process, filename=filename, mime_type=mime_type, data=data
+        return await asyncio.to_thread(
+            parser.parse,
+            ParseRequest(
+                filename=filename,
+                mime_type=mime_type,
+                data=data,
+                source_reference=storage_key,
+            ),
         )
-        return document, processor.name
 
     async def _record_failure(
         self,
@@ -236,9 +266,10 @@ class ProcessingService:
                 character_count=0,
             )
 
-        paragraphs = await self._repository.get_paragraph_texts(record.id)
+        # A single row read of the canonical text — no per-paragraph
+        # reconstruction, regardless of document size.
+        text = await self._repository.get_document_text(record.id) or ""
         outline = await self._repository.get_chapter_outline(record.id)
-        text = PARAGRAPH_SEPARATOR.join(paragraphs)
         return ReaderContent(
             status=ProcessingStatus.COMPLETED,
             title=book.title,

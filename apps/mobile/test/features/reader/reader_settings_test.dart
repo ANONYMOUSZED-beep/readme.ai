@@ -7,7 +7,7 @@ import 'package:readme_ai/core/theme/theme_mode_controller.dart';
 import 'package:readme_ai/features/reader/application/reader_settings.dart';
 import 'package:readme_ai/features/reader/application/reader_settings_controller.dart';
 import 'package:readme_ai/features/reader/presentation/reader_palette.dart';
-import 'package:readme_ai/features/reader/presentation/widgets/explainable_text.dart';
+import 'package:readme_ai/features/reader/presentation/widgets/page_turn_view.dart';
 
 import '../../helpers/fake_reader_repository.dart';
 import '../../helpers/pump_reader.dart';
@@ -93,8 +93,18 @@ void main() {
       ReaderPageTone.sepia,
     );
     expect(container.read(themeModeProvider), isNot(ThemeMode.dark));
-    final scaffold = tester.widget<Scaffold>(find.byType(Scaffold).first);
-    expect(scaffold.backgroundColor, ReaderPalette.sepia.page);
+    // The page itself takes the sepia tone.
+    final page = find.ancestor(
+      of: find.byType(PageTurnView),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is DecoratedBox &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration as BoxDecoration).color ==
+                ReaderPalette.sepia.page,
+      ),
+    );
+    expect(page, findsOneWidget);
   });
 
   testWidgets('book text uses the serif reading font by default', (
@@ -102,8 +112,10 @@ void main() {
   ) async {
     await pumpReader(tester, repository: FakeReaderRepository());
 
-    final text = tester.widget<ExplainableText>(find.byType(ExplainableText));
-    expect(text.style.fontFamily, AppFonts.serif);
+    final body = find.byWidgetPredicate(
+      (widget) => widget is Text && widget.style?.fontFamily == AppFonts.serif,
+    );
+    expect(body, findsWidgets);
   });
 
   testWidgets('the settings sheet fits a narrow phone', (tester) async {

@@ -1,42 +1,47 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/logging/app_logger.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../l10n/generated/app_localizations.dart';
-import '../../../shared/widgets/state_message.dart';
 import '../../activity/application/activity_providers.dart';
 import '../../activity/domain/activity_summary.dart';
 import '../../explanation/presentation/explanation_sheet.dart';
 import '../application/last_opened_book_controller.dart';
 import '../application/reader_controller.dart';
 import '../application/reader_providers.dart';
-import '../application/reader_settings.dart';
 import '../application/reader_settings_controller.dart';
 import '../domain/book_content.dart';
 import '../domain/bookmark.dart';
 import '../domain/chapter_mark.dart';
+import '../domain/character_anchor.dart';
 import '../domain/content_format.dart';
+import '../domain/document_outline.dart';
+import '../domain/document_pagination_source.dart';
+import '../domain/pagination_source.dart';
+import '../domain/reader_element.dart';
+import 'pagination/document_page.dart';
+import 'pagination/reading_paginator.dart';
 import 'reader_palette.dart';
+import 'rendering/element_renderer.dart';
+import 'rendering/element_renderer_registry.dart';
+import 'rendering/page_body.dart';
+import 'rendering/page_composer.dart';
+import 'rendering/render_block.dart';
+import 'rendering/selection_resolver.dart';
 import 'widgets/bookmarks_sheet.dart';
 import 'widgets/contents_sheet.dart';
-import 'widgets/explainable_text.dart';
+import 'widgets/page_turn_view.dart';
 import 'widgets/reader_settings_sheet.dart';
 
-/// Characters read per minute for time estimates (roughly 230 words/min).
-const int _charsPerMinute = 1200;
-
-/// Mirrors the backend's cap on reading time credited by a single save.
+/// Reading time credited per save is capped (the server does the same), so an
+/// idle open reader can't carry today's goal over the line on its own.
 const int _maxSecondsPerSave = 15 * 60;
 
 /// Immersive, API-backed reader with contextual AI assistance.
-///
-/// The page fills the screen; the top and bottom chrome slide away while the
-/// reader scrolls forward and return when they scroll back.
 class ReaderScreen extends ConsumerStatefulWidget {
   const ReaderScreen({required this.bookId, super.key});
 
@@ -48,16 +53,11 @@ class ReaderScreen extends ConsumerStatefulWidget {
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen>
     with WidgetsBindingObserver {
-  final ScrollController _scrollController = ScrollController();
-  // Measures reading time between saves; paused while the app is hidden.
-  late final Stopwatch _sessionStopwatch;
-  // Scroll-driven state lives in notifiers so scrolling never rebuilds the
-  // (potentially very long) book text.
-  final ValueNotifier<double> _progress = ValueNotifier(0);
-  final ValueNotifier<bool> _chromeVisible = ValueNotifier(true);
-  Timer? _saveDebounce;
+  /// How many pages ahead of the current one to prepare, so the reader can turn
+  /// forward without waiting for measurement.
+  static const int _lookahead = 2;
 
-  // Read once: `ref` must not be used in dispose, where the last save runs.
+  late final Stopwatch _sessionStopwatch;
   late final ReaderController _readerController;
   late final AppLogger _logger;
   bool _restored = false;
@@ -66,22 +66,41 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   bool _progressLoaded = false;
 
   /// Whether the position moved since the last save.
-  bool _unsaved = false;
-  bool _showTip = true;
-  int _characterCount = 0;
-  String? _text;
+  bool _moved = false;
 
-  // Today's activity when the book opened, to notice the goal being reached.
+  // Today's goal: the summary when the book opened, and the time read since.
   ActivitySummary? _activityAtOpen;
   int _secondsReadThisSession = 0;
   bool _celebrated = false;
+  double _progress = 0;
+  int _characterCount = 0;
+  int _currentOffset = 0;
+  int _currentIndex = 0;
+  String? _contentText;
+
+  // Incremental pagination state. The paginator measures only the pages needed
+  // for the current reading window; it is recreated when the layout key
+  // (font/size/viewport) changes, preserving the current character offset.
+  PaginationSource? _source;
+  String? _sourceText;
+  ReadingPaginator? _paginator;
+  PaginationKey? _paginationKey;
+
+  // Structured rendering. The composer turns a measured page plus the elements
+  // covering it into render blocks; the registry maps each block to a renderer.
+  // None of this participates in pagination — page boundaries are already fixed
+  // by the measurer over canonical text.
+  final PageComposer _composer = PageComposer();
+  final ElementRendererRegistry _registry = ElementRendererRegistry.standard();
+  static const SelectionResolver _selectionResolver = SelectionResolver();
+  DocumentOutline? _outline;
 
   @override
   void initState() {
     super.initState();
     _readerController = ref.read(readerControllerProvider);
-    _sessionStopwatch = ref.read(readingStopwatchProvider)();
     _logger = ref.read(loggerProvider);
+    _sessionStopwatch = ref.read(readingStopwatchProvider)();
     WidgetsBinding.instance.addObserver(this);
     // Providers can't be modified mid-build; record the visit right after.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -112,68 +131,129 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   @override
   void dispose() {
+    // Persistence on teardown is best-effort: if the surrounding scope is
+    // already gone, losing the final position must not throw during disposal.
     WidgetsBinding.instance.removeObserver(this);
-    _saveDebounce?.cancel();
-    _persistPosition(endSession: true);
-    _scrollController.dispose();
-    _progress.dispose();
-    _chromeVisible.dispose();
+    try {
+      _persistPosition(endSession: true);
+    } on Object {
+      // Intentionally ignored; the last saved position stands.
+    }
+    _paginator?.removeListener(_onPaginatorChanged);
+    _paginator?.dispose();
     super.dispose();
   }
 
-  double get _scrollFraction {
-    // Detached (e.g. while disposing): fall back to the last observed position.
-    if (!_scrollController.hasClients) return _progress.value;
-    final max = _scrollController.position.maxScrollExtent;
-    if (max <= 0) return 0;
-    return (_scrollController.offset / max).clamp(0.0, 1.0);
+  void _onPaginatorChanged() {
+    if (mounted) setState(() {});
   }
 
-  int _offsetFromFraction(double fraction) =>
-      (fraction * _characterCount).round();
-
-  bool _handleScroll(ScrollNotification notification) {
-    if (notification.depth != 0 || notification is! ScrollUpdateNotification) {
-      return false;
+  /// Returns the paginator for the current layout, creating a new one only when
+  /// the layout key changes. Construction is cheap and does no measurement;
+  /// pagination is kicked off after the frame, never inside `build()`.
+  ReadingPaginator _ensurePaginator({
+    required String text,
+    required TextStyle style,
+    required Size pageSize,
+    required TextDirection textDirection,
+    required TextScaler textScaler,
+    required Locale? locale,
+  }) {
+    if (_source == null || _sourceText != text) {
+      final outline = _outline;
+      // Structured when an outline is available, canonical text otherwise. The
+      // choice is made once, here; nothing downstream branches on it.
+      _source = outline == null
+          ? StringPaginationSource(text)
+          : DocumentPaginationSource(canonicalText: text, outline: outline);
+      _sourceText = text;
     }
-    _progress.value = _scrollFraction;
-    _unsaved = true;
-    _saveDebounce?.cancel();
-    _saveDebounce = Timer(const Duration(milliseconds: 1200), _persistPosition);
 
-    final metrics = notification.metrics;
-    final delta = notification.scrollDelta ?? 0;
-    if (metrics.pixels <= 40 || metrics.extentAfter <= 40) {
-      _chromeVisible.value = true;
-    } else if (notification.dragDetails != null && delta.abs() > 4) {
-      // Only user drags toggle the chrome, not programmatic jumps.
-      _chromeVisible.value = delta < 0;
+    final key = PaginationKey(
+      fontSize: style.fontSize ?? 0,
+      lineHeight: style.height ?? 0,
+      width: pageSize.width,
+      height: pageSize.height,
+      textScalerDescription: textScaler.toString(),
+      textDirection: textDirection,
+      locale: locale,
+    );
+
+    if (_paginator == null || _paginationKey != key) {
+      final previous = _paginator;
+      previous?.removeListener(_onPaginatorChanged);
+      previous?.dispose();
+
+      final paginator = ReadingPaginator(
+        source: _source!,
+        style: style,
+        pageSize: pageSize,
+        textDirection: textDirection,
+        textScaler: textScaler,
+        locale: locale,
+      )..addListener(_onPaginatorChanged);
+      _paginator = paginator;
+      _paginationKey = key;
+
+      // Measure off the build phase: prepare the current page (and look-ahead)
+      // for wherever the reader currently is, not the whole document.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _paginator != paginator) return;
+        _prepareWindow(paginator);
+      });
     }
-    return false;
+    return _paginator!;
+  }
+
+  Future<void> _prepareWindow(ReadingPaginator paginator) async {
+    final index = await paginator.ensureOffset(_currentOffset);
+    if (!mounted || _paginator != paginator) return;
+    setState(() => _currentIndex = index);
+    unawaited(paginator.ensureIndex(index + _lookahead));
+    unawaited(_prepareStructure(paginator, index));
+  }
+
+  /// Loads the structure covering the current page and its look-ahead.
+  ///
+  /// Always off the build phase, and never fatal: if elements cannot be loaded
+  /// the page still renders from canonical text.
+  Future<void> _prepareStructure(ReadingPaginator paginator, int index) async {
+    final outline = _outline;
+    if (outline == null) return;
+    final page = paginator.pageOrNull(index);
+    if (page == null) return;
+    final last = paginator.pageOrNull(index + _lookahead) ?? page;
+    try {
+      await outline.ensureRange(page.startOffset, last.endOffset);
+      unawaited(outline.prefetchAfter(last.endOffset));
+    } on Object {
+      // Degradation is the design: reading continues on canonical text.
+      return;
+    }
+    if (mounted && _paginator == paginator) setState(() {});
   }
 
   /// Save the position and the reading time since the last save.
   ///
   /// [endSession] also refreshes today's activity (used when leaving).
   void _persistPosition({bool endSession = false}) {
-    // Runs from dispose too, after the scroll view has detached, so it relies
-    // on [_scrollFraction]'s last observed position rather than the controller.
     if (_characterCount == 0) return;
     // Leaving before the saved position arrives must not overwrite it with 0.
-    if (!_progressLoaded && !_unsaved) return;
+    if (!_progressLoaded && !_moved) return;
     final seconds = _sessionStopwatch.elapsed.inSeconds;
     // Nothing moved and no time passed: not worth a request.
-    if (!_unsaved && seconds == 0) return;
-    _unsaved = false;
-    final fraction = _scrollFraction;
+    if (!_moved && seconds == 0) return;
+    _moved = false;
+    final fraction = (_currentOffset / _characterCount).clamp(0.0, 1.0);
     // Keeps running (or stopped) as it was; only the lap restarts.
     _sessionStopwatch.reset();
-    final controller = _readerController;
-    final save = endSession ? controller.endSession : controller.saveProgress;
+    final save = endSession
+        ? _readerController.endSession
+        : _readerController.saveProgress;
     unawaited(
       save(
         widget.bookId,
-        currentPosition: _offsetFromFraction(fraction).toString(),
+        currentPosition: _currentOffset.toString(),
         progressPercentage: fraction * 100,
         readingTimeSeconds: seconds,
       ).catchError((Object error) {
@@ -211,7 +291,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Daily goal reached · $streak-day streak. Keep going!',
+                  'Daily goal reached \u00b7 $streak-day streak. Keep going!',
                 ),
               ),
             ],
@@ -220,38 +300,76 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       );
   }
 
-  void _restorePosition(double percentage) {
-    if (_restored) return;
+  void _restorePosition(String anchor, double percentage) {
+    if (_restored || _characterCount == 0) return;
     _restored = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients || !mounted) return;
-      final max = _scrollController.position.maxScrollExtent;
-      final target = (percentage / 100).clamp(0.0, 1.0) * max;
-      _scrollController.jumpTo(target);
-      _progress.value = percentage / 100;
-    });
+    final savedOffset = int.tryParse(anchor);
+    _currentOffset =
+        (savedOffset ??
+                ((percentage / 100).clamp(0.0, 1.0) * _characterCount).round())
+            .clamp(0, _characterCount);
+    _progress = (_currentOffset / _characterCount).clamp(0.0, 1.0);
+
+    // Reading progress resolves asynchronously, so it can arrive after the
+    // paginator's initial window (built for offset 0) was already prepared.
+    // Align the reading window to the restored offset off the build phase.
+    if (_currentOffset > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final paginator = _paginator;
+        if (mounted && paginator != null) _prepareWindow(paginator);
+      });
+    }
   }
 
-  void _jumpToAnchor(String anchor) => _jumpToOffset(int.tryParse(anchor) ?? 0);
+  Future<void> _jumpToAnchor(String anchor) async {
+    if (_characterCount == 0) return;
+    final offset = (int.tryParse(anchor) ?? 0).clamp(0, _characterCount);
+    _currentOffset = offset;
+    _progress = (_currentOffset / _characterCount).clamp(0.0, 1.0);
+    _moved = true;
 
-  void _jumpToOffset(int offset) {
-    if (_characterCount == 0 || !_scrollController.hasClients) return;
-    final fraction = (offset / _characterCount).clamp(0.0, 1.0);
-    _chromeVisible.value = true;
-    _scrollController.animateTo(
-      fraction * _scrollController.position.maxScrollExtent,
-      duration: const Duration(milliseconds: 360),
-      curve: Curves.easeOutCubic,
-    );
+    final paginator = _paginator;
+    if (paginator == null) {
+      setState(() {});
+    } else {
+      final index = await paginator.ensureOffset(offset);
+      if (!mounted) return;
+      setState(() => _currentIndex = index);
+      unawaited(paginator.ensureIndex(index + _lookahead));
+      unawaited(_prepareStructure(paginator, index));
+    }
+    _persistPosition();
+  }
+
+  void _onPageChanged(ReadingPaginator paginator, int index) {
+    final page = paginator.pageOrNull(index);
+    if (page == null) return;
+    setState(() {
+      _currentIndex = index;
+      _moved = _moved || page.startOffset != _currentOffset;
+      _currentOffset = page.startOffset;
+      _progress = _characterCount == 0
+          ? 0
+          : (_currentOffset / _characterCount).clamp(0.0, 1.0);
+    });
+    _persistPosition();
+    // Prepare the next few pages so the following turn is instant.
+    unawaited(paginator.ensureIndex(index + _lookahead));
+    unawaited(_prepareStructure(paginator, index));
   }
 
   Future<void> _addBookmark() async {
     final l10n = AppLocalizations.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    final offset = _offsetFromFraction(_scrollFraction);
+    final offset = _currentOffset;
+    final label = _passageAt(_contentText ?? '', offset, maxLength: 72);
     await ref
         .read(readerControllerProvider)
-        .addBookmark(widget.bookId, anchor: offset.toString());
+        .addBookmark(
+          widget.bookId,
+          anchor: offset.toString(),
+          label: label.isEmpty ? null : label,
+        );
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -265,10 +383,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   void _openBookmarks() {
     showModalBottomSheet<void>(
       context: context,
+      showDragHandle: true,
       isScrollControlled: true,
       builder: (_) => BookmarksSheet(
         bookId: widget.bookId,
-        bookText: _text,
+        contentText: _contentText,
+        characterCount: _characterCount,
         onJump: (Bookmark bookmark) {
           Navigator.of(context).pop();
           _jumpToAnchor(bookmark.anchor);
@@ -280,13 +400,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   void _openContents(List<ChapterMark> chapters) {
     showModalBottomSheet<void>(
       context: context,
+      showDragHandle: true,
       isScrollControlled: true,
       builder: (sheetContext) => ContentsSheet(
         chapters: chapters,
-        currentOffset: _offsetFromFraction(_progress.value),
+        currentOffset: _currentOffset,
         onSelect: (chapter) {
           Navigator.of(sheetContext).pop();
-          _jumpToOffset(chapter.startOffset);
+          _jumpToAnchor(chapter.startOffset.toString());
         },
       ),
     );
@@ -295,6 +416,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   void _openSettings() {
     showModalBottomSheet<void>(
       context: context,
+      showDragHandle: true,
       isScrollControlled: true,
       builder: (_) => const ReaderSettingsSheet(),
     );
@@ -309,364 +431,361 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     );
     showModalBottomSheet<void>(
       context: context,
+      showDragHandle: true,
       isScrollControlled: true,
       builder: (_) => ExplanationSheet(args: args),
     );
   }
 
+  /// Composes the blocks for a measured page.
+  ///
+  /// Structure is used only when it is already resident, so this never awaits
+  /// and never triggers I/O during a build. With no structure the composer
+  /// returns plain-text blocks covering the page exactly.
+  List<RenderBlock> _composeBlocks(DocumentPage page) {
+    final outline = _outline;
+    final elements =
+        outline != null && outline.isReady(page.startOffset, page.endOffset)
+        ? outline.elementsIn(page.startOffset, page.endOffset)
+        : const <ReaderElement>[];
+    return _composer.compose(page: page, elements: elements);
+  }
+
+  RenderContext _renderContext(
+    ThemeData theme,
+    TextStyle textStyle,
+    ReaderPalette palette,
+  ) {
+    final colors = theme.colorScheme;
+    return RenderContext(
+      bodyStyle: textStyle,
+      // Text follows the chosen page tone; accents keep the app's theme.
+      colors: RenderPalette(
+        text: palette.ink,
+        muted: palette.muted,
+        accent: colors.primary,
+        surface: colors.surfaceContainerHighest,
+        outline: colors.outlineVariant,
+      ),
+      onLinkTap: _acknowledgeLink,
+    );
+  }
+
+  /// Hyperlinks acknowledge their target without leaving the Reader.
+  void _acknowledgeLink(String target) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(target), duration: const Duration(seconds: 2)),
+      );
+  }
+
+  /// Resolves a page selection to canonical offsets, then explains it.
+  ///
+  /// Resolution can decline: an unlocatable or ambiguous selection submits
+  /// nothing rather than a guessed range.
+  void _explainPageSelection(DocumentPage page, String selectedText) {
+    final span = _selectionResolver.resolve(
+      pageText: page.text,
+      pageStartOffset: page.startOffset,
+      selectedText: selectedText,
+      hintOffset: _currentOffset,
+    );
+    if (span == null) return;
+    _explainSelection(selectedText.trim(), span.start, span.end);
+  }
+
+  void _explainCurrentPassage() {
+    // Whole-passage explanation prefers the readable element the reader is
+    // inside — paragraph, code block, list item, quote, caption or table cell —
+    // and falls back to the surrounding text block when structure is absent.
+    final element = _outline?.readableElementAt(_currentOffset);
+    final span = element?.span;
+    final text = _contentText;
+    if (span != null && text != null) {
+      final selected = CharacterAnchor.substring(
+        text,
+        span.start,
+        span.end,
+      ).trim();
+      if (selected.isNotEmpty) {
+        _explainSelection(selected, span.start, span.end);
+        return;
+      }
+    }
+    _explainSurroundingText();
+  }
+
+  void _explainSurroundingText() {
+    final text = _contentText;
+    if (text == null || text.isEmpty) return;
+    final scalarOffset = _currentOffset.clamp(0, CharacterAnchor.length(text));
+    final codeUnitOffset = CharacterAnchor.toCodeUnit(text, scalarOffset);
+    final codeUnitStart = _paragraphStart(text, codeUnitOffset);
+    final codeUnitEnd = _paragraphEnd(text, codeUnitOffset);
+    final rawPassage = text.substring(codeUnitStart, codeUnitEnd);
+    final leadingWhitespace = rawPassage.length - rawPassage.trimLeft().length;
+    final trailingWhitespace =
+        rawPassage.length - rawPassage.trimRight().length;
+    final adjustedStart = codeUnitStart + leadingWhitespace;
+    final adjustedEnd = codeUnitEnd - trailingWhitespace;
+    final passage = text.substring(adjustedStart, adjustedEnd);
+    if (passage.isNotEmpty) {
+      _explainSelection(
+        passage,
+        CharacterAnchor.fromCodeUnit(text, adjustedStart),
+        CharacterAnchor.fromCodeUnit(text, adjustedEnd),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final contentState = ref.watch(bookContentProvider(widget.bookId));
-    final settings = ref.watch(readerSettingsProvider);
-    final palette = ReaderPalette.resolve(
-      settings.pageTone,
-      Theme.of(context).brightness,
-    );
-    final content = contentState.value;
-    final chapters = content?.chapters ?? const <ChapterMark>[];
-    final readable =
-        content != null &&
-        content.format == ContentFormat.text &&
-        content.text != null;
+    final theme = Theme.of(context);
 
     return Scaffold(
-      backgroundColor: palette.page,
-      body: AnimatedContainer(
-        duration: const Duration(milliseconds: 260),
-        color: palette.page,
-        child: Stack(
+      appBar: AppBar(
+        toolbarHeight: 68,
+        backgroundColor: theme.colorScheme.surface,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Positioned.fill(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 260),
-                child: switch (contentState) {
-                  AsyncData(:final value) => _buildContent(
-                    context,
-                    value,
-                    settings,
-                    palette,
-                  ),
-                  AsyncError() => _ReaderError(
-                    key: const ValueKey('reader-error'),
-                    onRetry: () =>
-                        ref.invalidate(bookContentProvider(widget.bookId)),
-                  ),
-                  _ => const Center(
-                    key: ValueKey('reader-loading'),
-                    child: CircularProgressIndicator(),
-                  ),
-                },
+            Text(
+              contentState.value?.title ?? l10n.appTitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Text(
+              '${(_progress * 100).round()}% complete',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
               ),
             ),
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: _TopBar(
-                visible: _chromeVisible,
-                palette: palette,
-                onBookmark: readable ? _addBookmark : null,
-                onBookmarks: _openBookmarks,
-                onSettings: _openSettings,
-                // A single chapter has nothing to navigate between.
-                onContents: readable && chapters.length > 1
-                    ? () => _openContents(chapters)
-                    : null,
-              ),
-            ),
-            if (readable)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: _BottomBar(
-                  visible: _chromeVisible,
-                  progress: _progress,
-                  palette: palette,
-                  characterCount: content.characterCount,
-                ),
-              ),
           ],
         ),
+        actions: [
+          // A single chapter has nothing to navigate between.
+          if ((contentState.value?.chapters.length ?? 0) > 1)
+            IconButton(
+              tooltip: l10n.contents,
+              icon: const Icon(Icons.toc_rounded),
+              onPressed: () => _openContents(contentState.value!.chapters),
+            ),
+          IconButton(
+            tooltip: l10n.bookmarkThisPosition,
+            icon: const Icon(Icons.bookmark_add_outlined),
+            onPressed: contentState.hasValue ? _addBookmark : null,
+          ),
+          IconButton(
+            tooltip: l10n.bookmarks,
+            icon: const Icon(Icons.bookmarks_outlined),
+            onPressed: _openBookmarks,
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: IconButton(
+              tooltip: l10n.readerSettings,
+              icon: const Icon(Icons.tune_rounded),
+              onPressed: _openSettings,
+            ),
+          ),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(3),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: _progress.clamp(0.0, 1.0)),
+            duration: const Duration(milliseconds: 180),
+            builder: (context, value, _) =>
+                LinearProgressIndicator(minHeight: 3, value: value),
+          ),
+        ),
+      ),
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 260),
+        child: switch (contentState) {
+          AsyncData(:final value) => _buildContent(context, value),
+          AsyncError() => _ReaderError(
+            onRetry: () => ref.invalidate(bookContentProvider(widget.bookId)),
+          ),
+          _ => const Center(child: CircularProgressIndicator()),
+        },
       ),
     );
   }
 
-  Widget _buildContent(
-    BuildContext context,
-    BookContent content,
-    ReaderSettings settings,
-    ReaderPalette palette,
-  ) {
+  Widget _buildContent(BuildContext context, BookContent content) {
     final l10n = AppLocalizations.of(context);
     if (content.format != ContentFormat.text || content.text == null) {
-      return StateMessage(
+      return _UnsupportedView(
         key: const ValueKey('unsupported-reader'),
-        icon: Icons.menu_book_outlined,
-        title: l10n.readerUnsupportedFormat,
-        message: l10n.readerUnsupportedDetail,
+        message: l10n.readerUnsupportedFormat,
       );
     }
 
-    _characterCount = content.characterCount;
-    _text = content.text;
-    final resumeState = ref.watch(readingProgressProvider(widget.bookId));
-    if (resumeState.hasValue) _progressLoaded = true;
-    final resume = resumeState.value;
-    if (resume != null) _restorePosition(resume.progressPercentage);
+    _characterCount = CharacterAnchor.length(content.text!);
+    _contentText = content.text;
+    _outline ??= ref.read(documentOutlineProvider(widget.bookId));
+    final progressAsync = ref.watch(readingProgressProvider(widget.bookId));
+    if (progressAsync.hasValue) _progressLoaded = true;
+    final resume = progressAsync.value;
+    if (resume != null) {
+      _restorePosition(resume.currentPosition, resume.progressPercentage);
+    }
 
-    final width = MediaQuery.sizeOf(context).width;
-    final gutter = width > 620 ? 40.0 : 24.0;
-    final insets = MediaQuery.paddingOf(context);
-    final serif = settings.typeface == ReaderTypeface.serif;
+    final settings = ref.watch(readerSettingsProvider);
+    final theme = Theme.of(context);
+    final palette = ReaderPalette.resolve(settings.pageTone, theme.brightness);
+    final textStyle =
+        theme.textTheme.bodyLarge?.copyWith(
+          fontFamily: settings.fontFamily,
+          fontSize: settings.fontSize,
+          height: settings.lineHeight,
+          letterSpacing: 0.05,
+          color: palette.ink,
+        ) ??
+        TextStyle(
+          fontFamily: settings.fontFamily,
+          fontSize: settings.fontSize,
+          height: settings.lineHeight,
+          color: palette.ink,
+        );
 
-    return NotificationListener<ScrollNotification>(
+    return LayoutBuilder(
       key: const ValueKey('text-reader'),
-      onNotification: _handleScroll,
-      child: Scrollbar(
-        controller: _scrollController,
-        child: SingleChildScrollView(
-          controller: _scrollController,
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth > 700;
+        final outerHorizontal = isWide ? 32.0 : 12.0;
+        final paperHorizontal = isWide ? 56.0 : 30.0;
+        const paperVertical = 34.0;
+        const footerHeight = 62.0;
+        final bookWidth = (constraints.maxWidth - outerHorizontal * 2).clamp(
+          1.0,
+          860.0,
+        );
+        final bookHeight = (constraints.maxHeight - 24 - footerHeight).clamp(
+          1.0,
+          double.infinity,
+        );
+        final textSize = Size(
+          (bookWidth - paperHorizontal * 2).clamp(1.0, double.infinity),
+          (bookHeight - paperVertical * 2).clamp(1.0, double.infinity),
+        );
+        final paginator = _ensurePaginator(
+          text: content.text!,
+          style: textStyle,
+          pageSize: textSize,
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          locale: Localizations.localeOf(context),
+        );
+
+        // The first readable page is prepared off the build phase; until then
+        // show a lightweight indicator instead of blocking on the whole book.
+        if (!paginator.hasFirstPage) {
+          return const Center(
+            key: ValueKey('reader-preparing'),
+            child: CircularProgressIndicator(),
+          );
+        }
+
+        final pageCount = paginator.pageCount;
+        final currentPage = _currentIndex.clamp(0, pageCount - 1);
+
+        return Padding(
           padding: EdgeInsets.fromLTRB(
-            gutter,
-            insets.top + 76,
-            gutter,
-            insets.bottom + 120,
+            outerHorizontal,
+            12,
+            outerHorizontal,
+            12,
           ),
           child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 680),
+            child: SizedBox(
+              width: bookWidth,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _ReaderHeading(
-                    title: content.title,
-                    minutes: math.max(
-                      1,
-                      (content.characterCount / _charsPerMinute).ceil(),
-                    ),
-                    palette: palette,
-                  ),
-                  if (_showTip)
-                    _ExplainTip(
-                      palette: palette,
-                      onDismiss: () => setState(() => _showTip = false),
-                    ),
-                  ExplainableText(
-                    text: content.text!,
-                    explainLabel: l10n.explain,
-                    style: TextStyle(
-                      fontFamily: serif ? AppFonts.serif : null,
-                      fontSize: settings.fontSize,
-                      height: settings.lineHeight,
-                      letterSpacing: serif ? 0.1 : 0.05,
-                      color: palette.ink,
-                    ),
-                    onExplain: _explainSelection,
-                  ),
-                  _EndMark(palette: palette),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TopBar extends StatelessWidget {
-  const _TopBar({
-    required this.visible,
-    required this.palette,
-    required this.onBookmark,
-    required this.onBookmarks,
-    required this.onSettings,
-    this.onContents,
-  });
-
-  final ValueListenable<bool> visible;
-  final ReaderPalette palette;
-  final VoidCallback? onBookmark;
-  final VoidCallback onBookmarks;
-  final VoidCallback onSettings;
-
-  /// Opens the table of contents; `null` hides the button.
-  final VoidCallback? onContents;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    final onContents = this.onContents;
-    final canPop = Navigator.of(context).canPop();
-    return ValueListenableBuilder<bool>(
-      valueListenable: visible,
-      builder: (context, shown, child) => IgnorePointer(
-        ignoring: !shown,
-        child: AnimatedSlide(
-          offset: shown ? Offset.zero : const Offset(0, -1),
-          duration: const Duration(milliseconds: 260),
-          curve: Curves.easeOutCubic,
-          child: AnimatedOpacity(
-            opacity: shown ? 1 : 0,
-            duration: const Duration(milliseconds: 200),
-            child: child,
-          ),
-        ),
-      ),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            stops: const [0, 0.7, 1],
-            colors: [
-              palette.page,
-              palette.page,
-              palette.page.withValues(alpha: 0),
-            ],
-          ),
-        ),
-        child: SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(6, 4, 6, 16),
-            child: Row(
-              children: [
-                if (canPop) BackButton(color: palette.ink),
-                const Spacer(),
-                if (onContents != null)
-                  IconButton(
-                    tooltip: l10n.contents,
-                    color: palette.ink,
-                    icon: const Icon(Icons.toc_rounded),
-                    onPressed: onContents,
-                  ),
-                IconButton(
-                  tooltip: l10n.bookmarkThisPosition,
-                  color: palette.ink,
-                  icon: const Icon(Icons.bookmark_add_outlined),
-                  onPressed: onBookmark,
-                ),
-                IconButton(
-                  tooltip: l10n.bookmarks,
-                  color: palette.ink,
-                  icon: const Icon(Icons.bookmarks_outlined),
-                  onPressed: onBookmarks,
-                ),
-                IconButton(
-                  tooltip: l10n.readerSettings,
-                  color: palette.ink,
-                  icon: const Icon(Icons.text_fields_rounded),
-                  onPressed: onSettings,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _BottomBar extends StatelessWidget {
-  const _BottomBar({
-    required this.visible,
-    required this.progress,
-    required this.palette,
-    required this.characterCount,
-  });
-
-  final ValueListenable<bool> visible;
-  final ValueListenable<double> progress;
-  final ReaderPalette palette;
-  final int characterCount;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final accent = theme.colorScheme.tertiary;
-    final caption = theme.textTheme.labelMedium?.copyWith(color: palette.muted);
-
-    return ValueListenableBuilder<double>(
-      valueListenable: progress,
-      builder: (context, value, _) {
-        final minutesLeft = ((1 - value) * characterCount / _charsPerMinute)
-            .ceil();
-        final remaining = value >= 0.995
-            ? 'Finished'
-            : minutesLeft <= 1
-            ? 'Under a minute left'
-            : '${_duration(minutesLeft)} left';
-
-        return ValueListenableBuilder<bool>(
-          valueListenable: visible,
-          builder: (context, shown, _) => Stack(
-            alignment: Alignment.bottomCenter,
-            children: [
-              // A hairline of progress stays while the chrome is hidden.
-              _ProgressTrack(
-                value: value,
-                height: 2,
-                color: accent,
-                track: Colors.transparent,
-              ),
-              IgnorePointer(
-                ignoring: !shown,
-                child: AnimatedSlide(
-                  offset: shown ? Offset.zero : const Offset(0, 1),
-                  duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeOutCubic,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.bottomCenter,
-                        end: Alignment.topCenter,
-                        stops: const [0, 0.7, 1],
-                        colors: [
-                          palette.page,
-                          palette.page,
-                          palette.page.withValues(alpha: 0),
+                  Expanded(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: palette.page,
+                        borderRadius: BorderRadius.circular(isWide ? 18 : 10),
+                        border: Border.all(color: palette.hairline),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.ink.withValues(alpha: 0.10),
+                            blurRadius: 30,
+                            offset: const Offset(0, 14),
+                          ),
                         ],
                       ),
-                    ),
-                    child: SafeArea(
-                      top: false,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(24, 22, 24, 12),
-                        child: Center(
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 680),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Row(
-                                  children: [
-                                    Text(
-                                      '${(value * 100).round()}%',
-                                      style: caption,
-                                    ),
-                                    const Spacer(),
-                                    Text(remaining, style: caption),
-                                  ],
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(isWide ? 18 : 10),
+                        child: PageTurnView(
+                          itemCount: pageCount,
+                          initialPage: currentPage,
+                          onPageChanged: (index) =>
+                              _onPageChanged(paginator, index),
+                          itemBuilder: (context, index) {
+                            final page = paginator.pageOrNull(index);
+                            if (page == null) {
+                              unawaited(paginator.ensureIndex(index));
+                              return const SizedBox.shrink();
+                            }
+                            return Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: paperHorizontal,
+                                vertical: paperVertical,
+                              ),
+                              child: PageBody(
+                                blocks: _composeBlocks(page),
+                                registry: _registry,
+                                explainLabel: l10n.explain,
+                                renderContext: _renderContext(
+                                  theme,
+                                  textStyle,
+                                  palette,
                                 ),
-                                const SizedBox(height: 8),
-                                _ProgressTrack(
-                                  value: value,
-                                  height: 4,
-                                  color: accent,
-                                  track: palette.hairline,
-                                ),
-                              ],
-                            ),
-                          ),
+                                onExplain: (selected) =>
+                                    _explainPageSelection(page, selected),
+                              ),
+                            );
+                          },
                         ),
                       ),
                     ),
                   ),
-                ),
+                  SizedBox(
+                    height: footerHeight,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Page ${currentPage + 1} of ${paginator.estimatedTotalPages}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        FilledButton.tonalIcon(
+                          onPressed: _explainCurrentPassage,
+                          icon: const Icon(
+                            Icons.auto_awesome_rounded,
+                            size: 17,
+                          ),
+                          label: const Text('Explain'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         );
       },
@@ -674,213 +793,119 @@ class _BottomBar extends StatelessWidget {
   }
 }
 
-class _ProgressTrack extends StatelessWidget {
-  const _ProgressTrack({
-    required this.value,
-    required this.height,
-    required this.color,
-    required this.track,
-  });
+class _UnsupportedView extends StatelessWidget {
+  const _UnsupportedView({required this.message, super.key});
 
-  final double value;
-  final double height;
-  final Color color;
-  final Color track;
+  final String message;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(height),
-      child: SizedBox(
-        height: height,
-        width: double.infinity,
-        child: Stack(
-          children: [
-            Positioned.fill(child: ColoredBox(color: track)),
-            FractionallySizedBox(
-              widthFactor: value.clamp(0.0, 1.0),
-              heightFactor: 1,
-              child: ColoredBox(color: color),
-            ),
-          ],
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 440),
+          padding: const EdgeInsets.all(30),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 68,
+                height: 68,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(21),
+                ),
+                child: Icon(
+                  Icons.picture_as_pdf_outlined,
+                  size: 31,
+                  color: theme.colorScheme.secondary,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                message,
+                style: theme.textTheme.titleLarge,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'PDF, EPUB, Markdown and plain-text books are supported. '
+                'Scanned or encrypted files may need OCR or a password first.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _ReaderHeading extends StatelessWidget {
-  const _ReaderHeading({
-    required this.title,
-    required this.minutes,
-    required this.palette,
-  });
-
-  final String title;
-  final int minutes;
-  final ReaderPalette palette;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 32),
-      child: Column(
-        children: [
-          Text(
-            '${_duration(minutes)} read'.toUpperCase(),
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: palette.muted,
-              letterSpacing: 1.6,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontFamily: AppFonts.serif,
-              fontSize: 30,
-              fontWeight: FontWeight.w600,
-              height: 1.2,
-              letterSpacing: -0.5,
-              color: palette.ink,
-            ),
-          ),
-          const SizedBox(height: 18),
-          _Ornament(palette: palette),
-        ],
-      ),
-    );
-  }
+int _paragraphStart(String text, int offset) {
+  if (text.isEmpty) return 0;
+  final safeOffset = offset.clamp(0, text.length);
+  final separator = text.lastIndexOf(
+    '\n\n',
+    safeOffset == 0 ? 0 : safeOffset - 1,
+  );
+  return separator == -1 ? 0 : separator + 2;
 }
 
-class _Ornament extends StatelessWidget {
-  const _Ornament({required this.palette});
-
-  final ReaderPalette palette;
-
-  @override
-  Widget build(BuildContext context) {
-    Widget rule() => Container(width: 32, height: 1, color: palette.hairline);
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        rule(),
-        const SizedBox(width: 10),
-        Icon(Icons.auto_awesome, size: 12, color: palette.muted),
-        const SizedBox(width: 10),
-        rule(),
-      ],
-    );
-  }
+int _paragraphEnd(String text, int offset) {
+  if (text.isEmpty) return 0;
+  final separator = text.indexOf('\n\n', offset.clamp(0, text.length));
+  return separator == -1 ? text.length : separator;
 }
 
-class _ExplainTip extends StatelessWidget {
-  const _ExplainTip({required this.palette, required this.onDismiss});
-
-  final ReaderPalette palette;
-  final VoidCallback onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final accent = theme.colorScheme.tertiary;
-    final style = theme.textTheme.bodyMedium?.copyWith(color: palette.ink);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 28),
-      padding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
-      decoration: BoxDecoration(
-        color: accent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: accent.withValues(alpha: 0.2)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.auto_awesome_rounded, size: 18, color: accent),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text.rich(
-              TextSpan(
-                style: style,
-                children: [
-                  const TextSpan(
-                    text:
-                        'Long-press a word or drag across a passage, then tap ',
-                  ),
-                  TextSpan(
-                    text: 'Explain',
-                    style: style?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                  const TextSpan(text: '.'),
-                ],
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: 'Dismiss tip',
-            color: palette.muted,
-            iconSize: 18,
-            icon: const Icon(Icons.close_rounded),
-            onPressed: onDismiss,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _EndMark extends StatelessWidget {
-  const _EndMark({required this.palette});
-
-  final ReaderPalette palette;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 56),
-      child: Column(
-        children: [
-          _Ornament(palette: palette),
-          const SizedBox(height: 12),
-          Text(
-            'END',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: palette.muted,
-              letterSpacing: 2.4,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+String _passageAt(String text, int offset, {required int maxLength}) {
+  if (text.isEmpty) return '';
+  final codeUnitOffset = CharacterAnchor.toCodeUnit(text, offset);
+  final passage = text
+      .substring(
+        _paragraphStart(text, codeUnitOffset),
+        _paragraphEnd(text, codeUnitOffset),
+      )
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  final passageLength = CharacterAnchor.length(passage);
+  if (passageLength <= maxLength) return passage;
+  if (maxLength <= 1) return maxLength == 1 ? '…' : '';
+  return '${CharacterAnchor.substring(passage, 0, maxLength - 1).trimRight()}…';
 }
 
 class _ReaderError extends StatelessWidget {
-  const _ReaderError({required this.onRetry, super.key});
+  const _ReaderError({required this.onRetry});
 
   final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    return StateMessage(
-      icon: Icons.cloud_off_rounded,
-      title: "Couldn't open this book.",
-      message: 'Check your connection and try again.',
-      action: OutlinedButton.icon(
-        onPressed: onRetry,
-        icon: const Icon(Icons.refresh_rounded),
-        label: Text(l10n.retry),
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.cloud_off_outlined, size: 52),
+          const SizedBox(height: 16),
+          Text(l10n.libraryLoadError),
+          const SizedBox(height: 18),
+          OutlinedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: Text(l10n.retry),
+          ),
+        ],
       ),
     );
   }
-}
-
-/// Human-friendly duration, e.g. `12 min` or `2 hr 5 min`.
-String _duration(int minutes) {
-  if (minutes < 60) return '$minutes min';
-  final hours = minutes ~/ 60;
-  final rest = minutes % 60;
-  return rest == 0 ? '$hours hr' : '$hours hr $rest min';
 }

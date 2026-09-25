@@ -1,11 +1,11 @@
 """create reading_activity and reading_goals
 
-Revision ID: 0007_create_activity_tables
-Revises: 0006_add_book_cover_storage_key
+Revision ID: 0008_create_activity_tables
+Revises: 0007_add_book_cover_storage_key
 Create Date: 2026-09-25
 
 ``books.status`` is backfilled from processing records in
-0005_backfill_book_status.
+0006_backfill_book_status.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0007_create_activity_tables"
-down_revision: str | None = "0006_add_book_cover_storage_key"
+revision: str = "0008_create_activity_tables"
+down_revision: str | None = "0007_add_book_cover_storage_key"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

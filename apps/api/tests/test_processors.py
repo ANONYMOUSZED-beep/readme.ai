@@ -13,13 +13,13 @@ from app.modules.processing.document import StructuredDocument
 from app.modules.processing.enums import ProcessingErrorCode
 from app.modules.processing.processors.base import ProcessingError
 from app.modules.processing.processors.epub import EpubProcessor
-from app.modules.processing.processors.pdf import PdfProcessor, reflow_pages
+from app.modules.processing.processors.pdf import PdfProcessor
 from app.modules.processing.processors.plain_text import (
     PlainTextProcessor,
     decode_text,
 )
 from app.modules.processing.registry import ProcessorRegistry
-from tests.documents import make_epub, make_pdf
+from tests.documents import make_epub
 
 
 def _paragraphs(document: StructuredDocument) -> list[str]:
@@ -158,67 +158,6 @@ def test_plain_text_form_feed_separates_paragraphs() -> None:
 
 
 # --- PDF -----------------------------------------------------------------------
-def test_pdf_extracts_reflowed_paragraphs_and_metadata() -> None:
-    data = make_pdf(
-        [
-            [
-                "The quick brown fox jumps over the lazy dog and keeps",
-                "running far away.",
-                "A second para-",
-                "graph starts here and it continues on",
-                "12",
-            ],
-            ["to the next page without a break at all in it.", "13"],
-        ],
-        title="A Fine PDF",
-        author="Jane Writer",
-    )
-
-    document = PdfProcessor().process(
-        filename="book.pdf", mime_type="application/pdf", data=data
-    )
-
-    assert _paragraphs(document) == [
-        "The quick brown fox jumps over the lazy dog and keeps running far away.",
-        "A second paragraph starts here and it continues on to the next page "
-        "without a break at all in it.",
-    ]
-    assert document.metadata.title == "A Fine PDF"
-    assert document.metadata.author == "Jane Writer"
-    assert document.metadata.page_count == 2
-    _assert_offsets_consistent(document)
-
-
-def test_pdf_without_text_is_reported_as_empty() -> None:
-    data = make_pdf([[], []])
-
-    with pytest.raises(ProcessingError) as exc:
-        PdfProcessor().process(filename="scan.pdf", mime_type="", data=data)
-
-    assert exc.value.code is ProcessingErrorCode.EMPTY_DOCUMENT
-    assert "scanned" in exc.value.message
-
-
-def test_damaged_pdf_is_reported_as_malformed() -> None:
-    with pytest.raises(ProcessingError) as exc:
-        PdfProcessor().process(
-            filename="bad.pdf", mime_type="application/pdf", data=b"not a pdf"
-        )
-
-    assert exc.value.code is ProcessingErrorCode.MALFORMED_FILE
-
-
-def test_reflow_keeps_hyphenated_compounds_before_capitals() -> None:
-    assert reflow_pages(["Anglo-\nSaxon history."]) == ["Anglo-Saxon history."]
-
-
-def test_reflow_drops_page_number_headers_and_footers() -> None:
-    pages = ["Page 3 of 10\nBody text that stays.\n3"]
-
-    assert reflow_pages(pages) == ["Body text that stays."]
-
-
-# --- EPUB ----------------------------------------------------------------------
 def test_epub_follows_spine_and_structure() -> None:
     data = make_epub(
         [

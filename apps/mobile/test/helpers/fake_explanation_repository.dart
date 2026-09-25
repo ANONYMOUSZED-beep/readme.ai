@@ -22,6 +22,9 @@ class FakeExplanationRepository implements ExplanationRepository {
   Completer<void>? gate;
 
   int calls = 0;
+  String? lastAnchor;
+  String? lastEndAnchor;
+  String? lastSelectedText;
 
   @override
   Future<Explanation> explain({
@@ -31,6 +34,9 @@ class FakeExplanationRepository implements ExplanationRepository {
     required String selectedText,
   }) async {
     calls++;
+    lastAnchor = anchor;
+    lastEndAnchor = endAnchor;
+    lastSelectedText = selectedText;
     if (gate != null) {
       await gate!.future;
     }

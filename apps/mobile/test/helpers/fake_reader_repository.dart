@@ -1,6 +1,8 @@
 import 'package:readme_ai/features/reader/domain/book_content.dart';
 import 'package:readme_ai/features/reader/domain/bookmark.dart';
+import 'package:readme_ai/features/reader/domain/character_anchor.dart';
 import 'package:readme_ai/features/reader/domain/content_format.dart';
+import 'package:readme_ai/features/reader/domain/element_window.dart';
 import 'package:readme_ai/features/reader/domain/reader_repository.dart';
 import 'package:readme_ai/features/reader/domain/reading_progress.dart';
 import 'package:readme_ai/features/reader/domain/recent_read.dart';
@@ -12,12 +14,18 @@ class FakeReaderRepository implements ReaderRepository {
     ReadingProgress? progress,
     List<Bookmark>? bookmarks,
     List<RecentRead>? recent,
+    ElementWindow? elements,
   }) : _content = content ?? textContent(),
        _progress = progress,
        _bookmarks = [...?bookmarks],
-       recent = [...?recent];
+       recent = [...?recent],
+       _elements = elements;
 
   final BookContent _content;
+  final ElementWindow? _elements;
+
+  /// Ranges requested through [getElements] (for assertions).
+  final List<(int, int)> requestedWindows = [];
   ReadingProgress? _progress;
   final List<Bookmark> _bookmarks;
 
@@ -31,6 +39,12 @@ class FakeReaderRepository implements ReaderRepository {
 
   int getProgressCalls = 0;
 
+  /// The most recently created bookmark anchor (for assertions).
+  String? lastCreatedBookmarkAnchor;
+
+  /// The most recently created bookmark label (for assertions).
+  String? lastCreatedBookmarkLabel;
+
   static BookContent textContent({
     String text =
         'It was a bright cold day in April, and the clocks were '
@@ -39,7 +53,7 @@ class FakeReaderRepository implements ReaderRepository {
     bookId: 'b1',
     title: 'Nineteen Eighty-Four',
     format: ContentFormat.text,
-    characterCount: text.length,
+    characterCount: CharacterAnchor.length(text),
     text: text,
   );
 
@@ -57,6 +71,16 @@ class FakeReaderRepository implements ReaderRepository {
   Future<ReadingProgress?> getProgress(String bookId) async {
     getProgressCalls++;
     return _progress;
+  }
+
+  @override
+  Future<ElementWindow> getElements(
+    String bookId, {
+    required int start,
+    required int end,
+  }) async {
+    requestedWindows.add((start, end));
+    return _elements ?? ElementWindow.empty(start: start, end: end);
   }
 
   @override
@@ -93,6 +117,8 @@ class FakeReaderRepository implements ReaderRepository {
     required String anchor,
     String? label,
   }) async {
+    lastCreatedBookmarkAnchor = anchor;
+    lastCreatedBookmarkLabel = label;
     final bookmark = Bookmark(
       id: 'bm-${_bookmarks.length + 1}',
       anchor: anchor,

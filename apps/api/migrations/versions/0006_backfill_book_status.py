@@ -4,8 +4,8 @@ Books are now moved to READY / FAILED when processing finishes. Rows processed
 before that change still read UPLOADED; derive their status from the existing
 processing record so the library shows the truth for old books too.
 
-Revision ID: 0005_backfill_book_status
-Revises: 0004_create_processing_tables
+Revision ID: 0006_backfill_book_status
+Revises: 0005_create_document_tables
 Create Date: 2026-09-24
 """
 
@@ -16,8 +16,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0005_backfill_book_status"
-down_revision: str | None = "0004_create_processing_tables"
+revision: str = "0006_backfill_book_status"
+down_revision: str | None = "0005_create_document_tables"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -27,6 +27,8 @@ from app.modules.explanation.provider import (
     ExplanationError,
     GeneratedExplanation,
 )
+from app.modules.processing.dependencies import get_parser_registry
+from app.modules.processing.parsers import ParserRegistry
 
 # A token value the fake verifier treats as invalid, for exercising the 401 path.
 INVALID_TOKEN = "invalid-token"
@@ -147,6 +149,16 @@ def explanation_provider() -> FakeExplanationProvider:
 
 
 @pytest.fixture
+def parser_registry() -> ParserRegistry:
+    """A fresh registry holding the application's parsers.
+
+    Parsers are stateless, so they are shared; the registry itself is rebuilt per
+    test so a test can register an extra parser without affecting others.
+    """
+    return ParserRegistry(list(get_parser_registry().available()))
+
+
+@pytest.fixture
 async def sessionmaker() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     """Create an isolated in-memory SQLite database with the schema applied.
 
@@ -184,6 +196,7 @@ async def client(
     verifier: FakeTokenVerifier,
     storage: FakeStorageService,
     explanation_provider: FakeExplanationProvider,
+    parser_registry: ParserRegistry,
 ) -> AsyncIterator[AsyncClient]:
     """An HTTP client bound to the ASGI app with test doubles wired in.
 
@@ -201,6 +214,7 @@ async def client(
     app.dependency_overrides[get_token_verifier] = lambda: verifier
     app.dependency_overrides[get_storage_service] = lambda: storage
     app.dependency_overrides[get_explanation_provider] = lambda: explanation_provider
+    app.dependency_overrides[get_parser_registry] = lambda: parser_registry
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

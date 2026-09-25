@@ -23,8 +23,10 @@ dependencies:
   freezed_annotation: ^3.1.0
   # Declarative, URL-based navigation.
   go_router: ^17.3.0
-  # Localization runtime (pinned by flutter_localizations).
   google_sign_in: ^7.2.0
+  # MIME-aware multipart uploads (exactly pinned).
+  http_parser: 4.1.2
+  # Localization runtime (pinned by flutter_localizations).
   intl: 0.20.2
   json_annotation: ^4.12.0
   # Remembers reading preferences (theme, typography) across launches.

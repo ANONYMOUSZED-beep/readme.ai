@@ -16,12 +16,14 @@ grounded in the surrounding text — without leaving the page.
   default). Each upload is processed into a structured document
   (chapters → sections → paragraphs → sentences) and its status moves from
   *Processing* to *Ready* or *Failed*.
-- **Reader** — reflowable text in a bundled serif (Lora) or sans font, with
-  adjustable size and spacing and Light, Sepia, or Dark pages; these choices
-  are remembered between sessions. A contents sheet jumps between chapters.
-  Your position is saved automatically and restored when you come back;
-  bookmarks save places you want to return to. Positions use stable
+- **Reader** — paginated pages in a bundled serif (Literata) or sans font, with
+  adjustable size and spacing and Paper, Sepia, White, or Night pages; these
+  choices are remembered between sessions. A contents sheet jumps between
+  chapters. Your position is saved automatically and restored when you come
+  back; bookmarks save places you want to return to. Positions use stable
   character-offset anchors, never page numbers, so they survive font changes.
+- **Streaks** — a daily reading goal, streaks, and daily tasks on the home
+  screen.
 - **Library** extras — a *Continue reading* shelf with your progress, and real
   cover art for EPUB books (other books get generated covers).
 - **Explanations** — select text and tap *Explain*. The backend decides whether
