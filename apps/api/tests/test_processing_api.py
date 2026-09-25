@@ -48,6 +48,35 @@ async def test_upload_produces_completed_processing(client: AsyncClient) -> None
     assert body["error_code"] is None
 
 
+async def test_upload_responds_before_processing_then_book_becomes_ready(
+    client: AsyncClient,
+) -> None:
+    response = await client.post(
+        _BOOKS, headers=_AUTH, files={"file": ("book.txt", _TEXT, "text/plain")}
+    )
+
+    # The upload answers immediately with the book queued for processing...
+    assert response.status_code == 201
+    assert response.json()["status"] == "PROCESSING"
+
+    # ...and processing, run after the response, leaves the book readable.
+    book_id = response.json()["id"]
+    book = await client.get(f"{_BOOKS}/{book_id}", headers=_AUTH)
+    assert book.json()["status"] == "READY"
+    content = await client.get(f"{_BOOKS}/{book_id}/content", headers=_AUTH)
+    assert content.json()["format"] == "text"
+
+
+async def test_failed_processing_marks_the_book_failed(client: AsyncClient) -> None:
+    book_id = await _upload(
+        client, filename="scan.pdf", content=b"%PDF-1.4", mime="application/pdf"
+    )
+
+    book = await client.get(f"{_BOOKS}/{book_id}", headers=_AUTH)
+
+    assert book.json()["status"] == "FAILED"
+
+
 async def test_unsupported_format_is_recorded_as_failed(
     client: AsyncClient,
 ) -> None:

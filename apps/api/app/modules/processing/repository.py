@@ -3,16 +3,23 @@
 Reprocessing clears a book's structural rows explicitly (in FK-safe order)
 rather than relying on database cascade, so behaviour is identical on SQLite
 (tests) and PostgreSQL (production).
+
+Structural rows are written with bulk ``INSERT ... VALUES`` statements rather
+than through the ORM unit of work: a long book produces tens of thousands of
+sentence rows, and per-object ORM bookkeeping was the dominant processing cost.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import Table, delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.base import Base
 from app.modules.processing.document import StructuredDocument
 from app.modules.processing.enums import ProcessingErrorCode, ProcessingStatus
 from app.modules.processing.models import (
@@ -22,6 +29,11 @@ from app.modules.processing.models import (
     Section,
     Sentence,
 )
+
+# Rows per bulk INSERT statement; bounds memory and driver parameter counts.
+_INSERT_BATCH_SIZE = 5_000
+
+_Row = dict[str, Any]
 
 
 class ProcessingRepository:
@@ -151,47 +163,47 @@ class ProcessingRepository:
         processed_book_id: uuid.UUID,
         document: StructuredDocument,
     ) -> None:
-        """Build and stage all structural rows with deterministic anchors.
+        """Bulk-insert all structural rows with deterministic anchors.
 
-        Rows are flushed level by level (chapters -> sections -> paragraphs ->
+        Levels are inserted in order (chapters -> sections -> paragraphs ->
         sentences) so each parent exists before its children — required by the
         foreign keys under PostgreSQL, where insert order is enforced.
         """
-        chapters: list[Chapter] = []
-        sections: list[Section] = []
-        paragraphs: list[Paragraph] = []
-        sentences: list[Sentence] = []
+        chapters: list[_Row] = []
+        sections: list[_Row] = []
+        paragraphs: list[_Row] = []
+        sentences: list[_Row] = []
         paragraph_order = 0
 
         for chapter_index, chapter in enumerate(document.chapters, start=1):
             chapter_anchor = f"ch{chapter_index}"
             chapter_id = uuid.uuid4()
             chapters.append(
-                Chapter(
-                    id=chapter_id,
-                    processed_book_id=processed_book_id,
-                    order_index=chapter_index,
-                    anchor=chapter_anchor,
-                    title=chapter.title,
-                    start_offset=chapter.start_offset,
-                    end_offset=chapter.end_offset,
-                )
+                {
+                    "id": chapter_id,
+                    "processed_book_id": processed_book_id,
+                    "order_index": chapter_index,
+                    "anchor": chapter_anchor,
+                    "title": chapter.title,
+                    "start_offset": chapter.start_offset,
+                    "end_offset": chapter.end_offset,
+                }
             )
 
             for section_index, section in enumerate(chapter.sections, start=1):
                 section_anchor = f"{chapter_anchor}-sec{section_index}"
                 section_id = uuid.uuid4()
                 sections.append(
-                    Section(
-                        id=section_id,
-                        processed_book_id=processed_book_id,
-                        chapter_id=chapter_id,
-                        order_index=section_index,
-                        anchor=section_anchor,
-                        title=section.title,
-                        start_offset=section.start_offset,
-                        end_offset=section.end_offset,
-                    )
+                    {
+                        "id": section_id,
+                        "processed_book_id": processed_book_id,
+                        "chapter_id": chapter_id,
+                        "order_index": section_index,
+                        "anchor": section_anchor,
+                        "title": section.title,
+                        "start_offset": section.start_offset,
+                        "end_offset": section.end_offset,
+                    }
                 )
 
                 for para_index, paragraph in enumerate(section.paragraphs, start=1):
@@ -199,33 +211,51 @@ class ProcessingRepository:
                     paragraph_anchor = f"{section_anchor}-p{para_index}"
                     paragraph_id = uuid.uuid4()
                     paragraphs.append(
-                        Paragraph(
-                            id=paragraph_id,
-                            processed_book_id=processed_book_id,
-                            section_id=section_id,
-                            order_index=paragraph_order,
-                            anchor=paragraph_anchor,
-                            start_offset=paragraph.start_offset,
-                            end_offset=paragraph.end_offset,
-                            text=paragraph.text,
-                        )
+                        {
+                            "id": paragraph_id,
+                            "processed_book_id": processed_book_id,
+                            "section_id": section_id,
+                            "order_index": paragraph_order,
+                            "anchor": paragraph_anchor,
+                            "start_offset": paragraph.start_offset,
+                            "end_offset": paragraph.end_offset,
+                            "text": paragraph.text,
+                        }
                     )
 
                     for sent_index, sentence in enumerate(paragraph.sentences, start=1):
                         sentences.append(
-                            Sentence(
-                                id=uuid.uuid4(),
-                                processed_book_id=processed_book_id,
-                                paragraph_id=paragraph_id,
-                                order_index=sent_index,
-                                anchor=f"{paragraph_anchor}-s{sent_index}",
-                                start_offset=sentence.start_offset,
-                                end_offset=sentence.end_offset,
-                            )
+                            {
+                                "id": uuid.uuid4(),
+                                "processed_book_id": processed_book_id,
+                                "paragraph_id": paragraph_id,
+                                "order_index": sent_index,
+                                "anchor": f"{paragraph_anchor}-s{sent_index}",
+                                "start_offset": sentence.start_offset,
+                                "end_offset": sentence.end_offset,
+                            }
                         )
 
         # Insert parents before children so foreign keys are satisfied.
-        for level in (chapters, sections, paragraphs, sentences):
-            if level:
-                self._session.add_all(level)
-                await self._session.flush()
+        for model, rows in (
+            (Chapter, chapters),
+            (Section, sections),
+            (Paragraph, paragraphs),
+            (Sentence, sentences),
+        ):
+            table = _table_of(model)
+            for batch in _batched(rows, _INSERT_BATCH_SIZE):
+                await self._session.execute(insert(table), batch)
+
+
+def _table_of(model: type[Base]) -> Table:
+    """Return the Core table behind an ORM model, for bulk statements."""
+    table = model.__table__
+    assert isinstance(table, Table)
+    return table
+
+
+def _batched(rows: list[_Row], size: int) -> Iterator[list[_Row]]:
+    """Yield consecutive slices of ``rows`` holding at most ``size`` items."""
+    for start in range(0, len(rows), size):
+        yield rows[start : start + size]

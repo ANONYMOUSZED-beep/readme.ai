@@ -84,6 +84,14 @@ class BookService:
             raise NotFoundError("Book not found.")
         return book
 
+    def set_status(self, book: Book, status: BookStatus) -> None:
+        """Update a book's lifecycle status within the current unit of work.
+
+        The caller commits, so the change lands atomically with related writes
+        (e.g. the processing result).
+        """
+        book.status = status
+
     async def delete_book(self, user_id: uuid.UUID, book_id: uuid.UUID) -> None:
         """Delete an owned book and its stored file."""
         book = await self.get_book(user_id, book_id)

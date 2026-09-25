@@ -5,14 +5,19 @@ processor -> produce structured document -> persist -> COMPLETED / FAILED.
 All failures are recorded as structured errors; processing never raises to the
 caller for an expected failure (unsupported/malformed/too-large), so triggering
 it during upload cannot fail the upload.
+
+The book's own status mirrors the pipeline (PROCESSING -> READY / FAILED) so
+clients can follow progress through the library API.
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 
 from app.core.storage.base import StorageService
+from app.modules.library.enums import BookStatus
 from app.modules.library.service import BookService
 from app.modules.processing.enums import ProcessingErrorCode, ProcessingStatus
 from app.modules.processing.models import ProcessedBook
@@ -49,6 +54,17 @@ class ProcessingService:
         self._registry = registry
         self._max_document_bytes = max_document_bytes
 
+    async def mark_queued(self, user_id: uuid.UUID, book_id: uuid.UUID) -> None:
+        """Record that processing is about to run, before it starts.
+
+        Lets the upload respond immediately with a ``PROCESSING`` book whose
+        status endpoint already exists, while the work itself runs later.
+        """
+        book = await self._book_service.get_book(user_id, book_id)
+        await self._repository.upsert_record(book_id, ProcessingStatus.QUEUED)
+        self._book_service.set_status(book, BookStatus.PROCESSING)
+        await self._repository.commit()
+
     async def process_book(
         self,
         user_id: uuid.UUID,
@@ -60,6 +76,7 @@ class ProcessingService:
         record = await self._repository.upsert_record(
             book_id, ProcessingStatus.PROCESSING
         )
+        self._book_service.set_status(book, BookStatus.PROCESSING)
         await self._repository.commit()
 
         try:
@@ -77,20 +94,26 @@ class ProcessingService:
                     ProcessingErrorCode.UNSUPPORTED_FORMAT,
                     f"No processor supports '{book.mime_type}'.",
                 )
-            document = processor.process(
+            # Parsing is CPU-bound; run it off the event loop so a large book
+            # never stalls other requests.
+            document = await asyncio.to_thread(
+                processor.process,
                 filename=book.original_filename,
                 mime_type=book.mime_type,
                 data=data,
             )
             await self._repository.save_completed(record, document, processor.name)
+            self._book_service.set_status(book, BookStatus.READY)
         except ProcessingError as error:
             await self._repository.save_failed(record, error.code, error.message)
+            self._book_service.set_status(book, BookStatus.FAILED)
         except Exception as error:
             # Record any unexpected failure as a structured internal error
             # rather than letting it escape and break the triggering request.
             await self._repository.save_failed(
                 record, ProcessingErrorCode.INTERNAL, str(error)
             )
+            self._book_service.set_status(book, BookStatus.FAILED)
 
         await self._repository.commit()
         return record

@@ -29,9 +29,10 @@ async def upload_book(
 ) -> BookResponse:
     """Upload a book file, create its library record, and begin processing.
 
-    Processing is triggered through the :class:`ProcessingTrigger` seam (inline
-    today, a background worker later) and never fails the upload — processing
-    errors are recorded as the book's processing status.
+    Responds as soon as the file is stored, with the book in ``PROCESSING``;
+    structuring its content runs afterwards through the
+    :class:`ProcessingTrigger` seam and never fails the upload. Clients poll
+    the book until it is ``READY`` (or ``FAILED``).
     """
     content = await file.read()
     book = await service.upload(

@@ -31,7 +31,8 @@ async def test_upload_creates_book_and_stores_file(
     assert body["title"] == "My Book"
     assert body["original_filename"] == "book.pdf"
     assert body["mime_type"] == "application/pdf"
-    assert body["status"] == "UPLOADED"
+    # Processing continues after the response; the book is queued for it.
+    assert body["status"] == "PROCESSING"
     assert body["file_size"] > 0
     assert body["id"]
     # The binary was persisted to storage exactly once.
