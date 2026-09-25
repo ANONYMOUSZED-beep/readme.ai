@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.routes import system
+from app.modules.activity import router as activity
 from app.modules.auth import router as auth
 from app.modules.explanation import router as explanation
 from app.modules.library import router as library
@@ -31,3 +32,4 @@ api_router.include_router(
 api_router.include_router(
     explanation.router, prefix="/api/v1/books", tags=["explanation"]
 )
+api_router.include_router(activity.router, prefix="/api/v1/activity", tags=["activity"])

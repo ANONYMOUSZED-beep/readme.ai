@@ -10,6 +10,8 @@ import uuid
 
 from fastapi import APIRouter, status
 
+from app.modules.activity.clock import ClientToday
+from app.modules.activity.dependencies import ActivityServiceDep
 from app.modules.auth.dependencies import CurrentUser
 from app.modules.reader.dependencies import ReaderServiceDep
 from app.modules.reader.schemas import (
@@ -72,8 +74,13 @@ async def save_progress(
     payload: UpdateProgressRequest,
     user: CurrentUser,
     service: ReaderServiceDep,
+    activity: ActivityServiceDep,
+    today: ClientToday,
 ) -> ReadingProgressResponse:
-    """Create or update the reading position for a book."""
+    """Create or update the reading position for a book.
+
+    The reading time also counts toward today's goal and streak.
+    """
     progress = await service.save_progress(
         user_id=user.id,
         book_id=book_id,
@@ -81,7 +88,9 @@ async def save_progress(
         progress_percentage=payload.progress_percentage,
         reading_time_seconds=payload.reading_time_seconds,
     )
-    return ReadingProgressResponse.model_validate(progress)
+    response = ReadingProgressResponse.model_validate(progress)
+    await activity.record_reading(user.id, today, payload.reading_time_seconds)
+    return response
 
 
 @router.get(
@@ -111,15 +120,19 @@ async def create_bookmark(
     payload: CreateBookmarkRequest,
     user: CurrentUser,
     service: ReaderServiceDep,
+    activity: ActivityServiceDep,
+    today: ClientToday,
 ) -> BookmarkResponse:
-    """Create a bookmark at a stable position anchor."""
+    """Create a bookmark at a stable position anchor (counts toward tasks)."""
     bookmark = await service.add_bookmark(
         user_id=user.id,
         book_id=book_id,
         anchor=payload.anchor,
         label=payload.label,
     )
-    return BookmarkResponse.model_validate(bookmark)
+    response = BookmarkResponse.model_validate(bookmark)
+    await activity.record_bookmark(user.id, today)
+    return response
 
 
 @router.delete(

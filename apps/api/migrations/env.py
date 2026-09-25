@@ -22,6 +22,7 @@ from app.db.base import Base
 
 # Import model-bearing modules so their tables are registered on Base.metadata
 # for Alembic autogeneration.
+from app.modules.activity import models as _activity_models  # noqa: F401
 from app.modules.auth import models as _auth_models  # noqa: F401
 from app.modules.library import models as _library_models  # noqa: F401
 from app.modules.processing import models as _processing_models  # noqa: F401
