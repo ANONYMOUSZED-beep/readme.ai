@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/theme/app_colors.dart';
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../shared/widgets/skeleton.dart';
 import '../application/explanation_providers.dart';
 import '../domain/explanation.dart';
 import '../domain/prerequisite.dart';
 import '../domain/selection_type.dart';
 
 /// Unified sheet showing the backend's contextual explanation for a selection.
+///
+/// The selection is quoted immediately so the reader keeps their bearings
+/// while the explanation loads beneath it.
 class ExplanationSheet extends ConsumerWidget {
   const ExplanationSheet({required this.args, super.key});
 
@@ -22,48 +27,34 @@ class ExplanationSheet extends ConsumerWidget {
     return SafeArea(
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.84,
+          maxHeight: MediaQuery.sizeOf(context).height * 0.86,
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(22, 2, 22, 22),
+          padding: const EdgeInsets.fromLTRB(24, 0, 12, 12),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(
-                      Icons.auto_awesome_rounded,
-                      color: theme.colorScheme.primary,
+                  Icon(
+                    Icons.auto_awesome_rounded,
+                    size: 16,
+                    color: theme.colorScheme.tertiary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'EXPLAIN',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.tertiary,
+                      letterSpacing: 1.4,
                     ),
                   ),
-                  const SizedBox(width: 13),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Explain this', style: theme.textTheme.titleLarge),
-                        const SizedBox(height: 2),
-                        Text(
-                          '“${_title(args.selectedText)}”',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                            fontStyle: FontStyle.italic,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
+                  if (state case AsyncData(:final value)) ...[
+                    const SizedBox(width: 8),
+                    _TypeBadge(type: value.selectionType),
+                  ],
+                  const Spacer(),
                   IconButton(
                     tooltip: l10n.close,
                     icon: const Icon(Icons.close),
@@ -71,21 +62,41 @@ class ExplanationSheet extends ConsumerWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
               Flexible(
-                child: switch (state) {
-                  AsyncData(:final value) => SingleChildScrollView(
-                    child: _ExplanationBody(explanation: value),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.only(right: 12, bottom: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _SelectionQuote(
+                        text: args.selectedText,
+                        type: state.value?.selectionType,
+                      ),
+                      const SizedBox(height: 22),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 260),
+                        switchInCurve: Curves.easeOutCubic,
+                        layoutBuilder: (current, previous) => Stack(
+                          alignment: Alignment.topLeft,
+                          children: [...previous, ?current],
+                        ),
+                        child: switch (state) {
+                          AsyncData(:final value) => _ExplanationBody(
+                            key: const ValueKey('explanation'),
+                            explanation: value,
+                          ),
+                          AsyncError() => _ErrorBody(
+                            key: const ValueKey('error'),
+                            message: l10n.explanationError,
+                            onRetry: () =>
+                                ref.invalidate(explanationProvider(args)),
+                          ),
+                          _ => const _LoadingBody(key: ValueKey('loading')),
+                        },
+                      ),
+                    ],
                   ),
-                  AsyncError() => _ErrorBody(
-                    message: l10n.explanationError,
-                    onRetry: () => ref.invalidate(explanationProvider(args)),
-                  ),
-                  _ => const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 38),
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-                },
+                ),
               ),
             ],
           ),
@@ -93,15 +104,63 @@ class ExplanationSheet extends ConsumerWidget {
       ),
     );
   }
+}
 
-  String _title(String text) {
+/// The reader's selection: a large serif headword for single words, an
+/// italic pull-quote for sentences and passages.
+class _SelectionQuote extends StatelessWidget {
+  const _SelectionQuote({required this.text, required this.type});
+
+  final String text;
+  final SelectionType? type;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final trimmed = text.trim();
-    return trimmed.length <= 70 ? trimmed : '${trimmed.substring(0, 70)}…';
+    final isWord =
+        type == SelectionType.word ||
+        (type == null && !trimmed.contains(RegExp(r'\s')));
+
+    if (isWord) {
+      return Text(
+        trimmed,
+        style: TextStyle(
+          fontFamily: AppFonts.serif,
+          fontSize: 34,
+          fontWeight: FontWeight.w600,
+          height: 1.15,
+          letterSpacing: -0.6,
+          color: theme.colorScheme.onSurface,
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.only(left: 14),
+      decoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(color: theme.colorScheme.tertiary, width: 3),
+        ),
+      ),
+      child: Text(
+        '“$trimmed”',
+        maxLines: 5,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontFamily: AppFonts.serif,
+          fontStyle: FontStyle.italic,
+          fontSize: 18,
+          height: 1.5,
+          color: theme.colorScheme.onSurface,
+        ),
+      ),
+    );
   }
 }
 
 class _ExplanationBody extends StatelessWidget {
-  const _ExplanationBody({required this.explanation});
+  const _ExplanationBody({required this.explanation, super.key});
 
   final Explanation explanation;
 
@@ -115,50 +174,65 @@ class _ExplanationBody extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _TypeBadge(type: explanation.selectionType),
-        const SizedBox(height: 16),
         if (meaning != null && meaning.isNotEmpty) ...[
-          _SectionLabel(
-            icon: Icons.translate_rounded,
-            label: l10n.explanationMeaning,
+          _SectionLabel(l10n.explanationMeaning),
+          const SizedBox(height: 6),
+          Text(
+            meaning,
+            style: theme.textTheme.titleLarge?.copyWith(height: 1.3),
           ),
-          const SizedBox(height: 8),
-          Text(meaning, style: theme.textTheme.headlineSmall),
           const SizedBox(height: 22),
         ],
-        const _SectionLabel(
-          icon: Icons.lightbulb_outline_rounded,
-          label: 'In this context',
+        const _SectionLabel('In this context'),
+        const SizedBox(height: 6),
+        Text(
+          explanation.explanation,
+          style: theme.textTheme.bodyLarge?.copyWith(fontSize: 17, height: 1.6),
         ),
-        const SizedBox(height: 8),
-        Text(explanation.explanation, style: theme.textTheme.bodyLarge),
         if (example != null && example.isNotEmpty) ...[
           const SizedBox(height: 22),
-          _SectionLabel(
-            icon: Icons.format_quote_rounded,
-            label: l10n.explanationExample,
-          ),
+          _SectionLabel(l10n.explanationExample),
           const SizedBox(height: 8),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
             decoration: BoxDecoration(
-              color: theme.colorScheme.secondaryContainer,
-              borderRadius: BorderRadius.circular(16),
+              color: theme.colorScheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(14),
             ),
             child: Text(
               example,
-              style: theme.textTheme.bodyMedium?.copyWith(
+              style: TextStyle(
+                fontFamily: AppFonts.serif,
                 fontStyle: FontStyle.italic,
-                color: theme.colorScheme.onSecondaryContainer,
+                fontSize: 16,
+                height: 1.5,
+                color: theme.colorScheme.onSurface,
               ),
             ),
           ),
         ],
         if (explanation.prerequisites.isNotEmpty) ...[
-          const SizedBox(height: 14),
+          const SizedBox(height: 22),
           _PrerequisitesSection(prerequisites: explanation.prerequisites),
         ],
+        const SizedBox(height: 22),
+        Row(
+          children: [
+            Icon(
+              Icons.info_outline_rounded,
+              size: 14,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'Explained using the surrounding text. AI can make mistakes.',
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
       ],
     );
   }
@@ -178,17 +252,17 @@ class _TypeBadge extends StatelessWidget {
       SelectionType.paragraph => 'PASSAGE',
     };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: theme.colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(9),
+        color: theme.colorScheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(99),
       ),
       child: Text(
         label,
         style: theme.textTheme.labelSmall?.copyWith(
-          color: theme.colorScheme.onPrimaryContainer,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 0.8,
+          color: theme.colorScheme.onSurfaceVariant,
+          fontSize: 10,
+          letterSpacing: 1,
         ),
       ),
     );
@@ -196,27 +270,19 @@ class _TypeBadge extends StatelessWidget {
 }
 
 class _SectionLabel extends StatelessWidget {
-  const _SectionLabel({required this.icon, required this.label});
+  const _SectionLabel(this.label);
 
-  final IconData icon;
   final String label;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Row(
-      children: [
-        Icon(icon, size: 17, color: theme.colorScheme.primary),
-        const SizedBox(width: 7),
-        Text(
-          label.toUpperCase(),
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.9,
-          ),
-        ),
-      ],
+    return Text(
+      label.toUpperCase(),
+      style: theme.textTheme.labelSmall?.copyWith(
+        color: theme.colorScheme.onSurfaceVariant,
+        letterSpacing: 1.2,
+      ),
     );
   }
 }
@@ -230,30 +296,83 @@ class _PrerequisitesSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
-    return Theme(
-      data: theme.copyWith(dividerColor: Colors.transparent),
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border.all(color: theme.colorScheme.outlineVariant),
-          borderRadius: BorderRadius.circular(16),
-        ),
+    final count = prerequisites.length;
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.tertiaryContainer.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: theme.copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           shape: const RoundedRectangleBorder(),
           collapsedShape: const RoundedRectangleBorder(),
-          leading: const Icon(Icons.account_tree_outlined),
-          title: Text(l10n.prerequisites),
-          subtitle: const Text('Helpful ideas to know first'),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+          iconColor: theme.colorScheme.onTertiaryContainer,
+          collapsedIconColor: theme.colorScheme.onTertiaryContainer,
+          leading: Icon(
+            Icons.account_tree_outlined,
+            color: theme.colorScheme.tertiary,
+          ),
+          title: Text(
+            l10n.prerequisites,
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: theme.colorScheme.onTertiaryContainer,
+            ),
+          ),
+          subtitle: Text(
+            '$count ${count == 1 ? 'idea' : 'ideas'} worth knowing first',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onTertiaryContainer.withValues(
+                alpha: 0.75,
+              ),
+            ),
+          ),
           children: [
-            for (final prerequisite in prerequisites)
-              ListTile(
-                dense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                leading: Icon(
-                  Icons.school_outlined,
-                  color: theme.colorScheme.primary,
+            for (var i = 0; i < count; i++)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 24,
+                      height: 24,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surface,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text(
+                        '${i + 1}',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.tertiary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            prerequisites[i].name,
+                            style: theme.textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            prerequisites[i].reason,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                title: Text(prerequisite.name),
-                subtitle: Text(prerequisite.reason),
               ),
           ],
         ),
@@ -262,8 +381,58 @@ class _PrerequisitesSection extends StatelessWidget {
   }
 }
 
+class _LoadingBody extends StatelessWidget {
+  const _LoadingBody({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: theme.colorScheme.tertiary,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              'Reading the context…',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        const SkeletonPulse(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SkeletonBox(width: 90, height: 10),
+              SizedBox(height: 12),
+              SkeletonBox(),
+              SizedBox(height: 10),
+              SkeletonBox(),
+              SizedBox(height: 10),
+              SkeletonBox(width: 220),
+              SizedBox(height: 26),
+              SkeletonBox(height: 64, radius: 14),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _ErrorBody extends StatelessWidget {
-  const _ErrorBody({required this.message, required this.onRetry});
+  const _ErrorBody({required this.message, required this.onRetry, super.key});
 
   final String message;
   final VoidCallback onRetry;
@@ -272,31 +441,25 @@ class _ErrorBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 20),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.auto_awesome_outlined,
-              size: 44,
-              color: theme.colorScheme.error,
-            ),
-            const SizedBox(height: 14),
-            Text(
-              message,
-              style: theme.textTheme.bodyLarge,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 18),
-            FilledButton.tonalIcon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh_rounded),
-              label: Text(l10n.retry),
-            ),
-          ],
-        ),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.errorContainer.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(message, style: theme.textTheme.bodyLarge),
+          const SizedBox(height: 14),
+          OutlinedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: Text(l10n.retry),
+            style: OutlinedButton.styleFrom(minimumSize: const Size(48, 44)),
+          ),
+        ],
       ),
     );
   }

@@ -35,7 +35,14 @@ void main() {
     await pumpApp(tester, authRepository: auth, libraryRepository: library);
 
     expect(find.byType(BookCard), findsOneWidget);
-    expect(find.text('Clean Architecture'), findsOneWidget);
+    // The title is typeset on the generated cover and captioned beneath it.
+    expect(
+      find.descendant(
+        of: find.byType(BookCard),
+        matching: find.text('Clean Architecture'),
+      ),
+      findsWidgets,
+    );
   });
 
   testWidgets('shows the empty state when there are no books', (tester) async {
@@ -52,7 +59,7 @@ void main() {
     expect(find.byType(BookCard), findsNothing);
   });
 
-  testWidgets('shows a loading indicator while the library loads', (
+  testWidgets('shows a loading skeleton while the library loads', (
     tester,
   ) async {
     final auth = FakeAuthRepository(initialUser: _signedIn);
@@ -65,9 +72,12 @@ void main() {
       libraryRepository: library,
       settle: false,
     );
-    await tester.pump(); // one frame; list fetch is still pending
+    // Let auth resolve and route to the library; the list fetch stays pending.
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
 
-    expect(find.byType(CircularProgressIndicator), findsWidgets);
+    expect(find.byKey(const ValueKey('library-loading')), findsOneWidget);
 
     library.releaseList!.complete();
     await tester.pumpAndSettle();
@@ -98,8 +108,10 @@ void main() {
       filePicker: picker,
     );
     expect(find.byType(BookCard), findsNothing);
+    // An empty library offers upload in place of the floating button.
+    expect(find.byType(FloatingActionButton), findsNothing);
 
-    await tester.tap(find.widgetWithText(FloatingActionButton, 'Upload book'));
+    await tester.tap(find.text('Upload book'));
     await tester.pumpAndSettle();
 
     expect(find.byType(BookCard), findsOneWidget);

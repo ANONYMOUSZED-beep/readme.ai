@@ -2,7 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'reader_settings.dart';
 
-/// Holds and mutates the reader's display settings (font size, line spacing).
+/// Holds and mutates the reader's display settings (font size, line spacing,
+/// typeface, and page tone).
 class ReaderSettingsController extends Notifier<ReaderSettings> {
   static const _fontStep = 2.0;
   static const _lineStep = 0.2;
@@ -17,6 +18,12 @@ class ReaderSettingsController extends Notifier<ReaderSettings> {
   void increaseLineHeight() => _setLineHeight(state.lineHeight + _lineStep);
 
   void decreaseLineHeight() => _setLineHeight(state.lineHeight - _lineStep);
+
+  void setTypeface(ReaderTypeface typeface) =>
+      state = state.copyWith(typeface: typeface);
+
+  void setPageTone(ReaderPageTone tone) =>
+      state = state.copyWith(pageTone: tone);
 
   void _setFontSize(double value) {
     state = state.copyWith(

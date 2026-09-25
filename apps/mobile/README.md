@@ -73,6 +73,22 @@ font size / line spacing and light/dark mode. Reading position and bookmarks use
 **stable character-offset anchors** (not page numbers). Non-text formats (PDF)
 show a documented "preview not available yet" message pending a future parser.
 
+## Design system
+
+A warm, editorial look: ink on paper, with the cobalt "insight" accent kept for
+AI moments (explanations, sparkles, reading progress).
+
+- **Tokens** live in `core/theme/app_colors.dart`; `core/theme/app_theme.dart`
+  maps them onto Material 3 (ink `primary`, insight `tertiary`).
+- **Type**: headings and book text use **Literata**, a serif designed for
+  screen reading, bundled under `assets/fonts/literata/` (SIL OFL 1.1, see
+  `OFL.txt`) so it renders identically on every platform. UI text uses the
+  platform sans.
+- **Reader**: page tones (Paper, Sepia, White; Night in dark mode) and typeface
+  are `ReaderSettings`; colors resolve in `reader/presentation/reader_palette.dart`.
+- **Shared widgets**: `shared/widgets/` (skeleton loaders, state messages) and
+  the generated `BookCover` in `library/presentation/widgets/`.
+
 ## Commands
 
 ```bash

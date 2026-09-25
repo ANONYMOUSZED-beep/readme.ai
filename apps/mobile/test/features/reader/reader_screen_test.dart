@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:readme_ai/core/theme/theme_mode_controller.dart';
+import 'package:readme_ai/features/reader/application/reader_settings.dart';
 import 'package:readme_ai/features/reader/application/reader_settings_controller.dart';
 
 import '../../helpers/fake_reader_repository.dart';
@@ -45,7 +46,7 @@ void main() {
     expect(container.read(readerSettingsProvider).fontSize, initial + 2);
   });
 
-  testWidgets('reader settings toggle dark mode', (tester) async {
+  testWidgets('choosing the Night page switches to dark mode', (tester) async {
     final container = await pumpReader(
       tester,
       repository: FakeReaderRepository(),
@@ -53,10 +54,50 @@ void main() {
 
     await tester.tap(find.byTooltip('Reader settings'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(SwitchListTile));
+    await tester.tap(find.text('Night'));
     await tester.pumpAndSettle();
 
     expect(container.read(themeModeProvider), ThemeMode.dark);
+  });
+
+  testWidgets('choosing a page tone applies it in light mode', (tester) async {
+    final container = await pumpReader(
+      tester,
+      repository: FakeReaderRepository(),
+    );
+    container.read(themeModeProvider.notifier).setMode(ThemeMode.dark);
+
+    await tester.tap(find.byTooltip('Reader settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sepia'));
+    await tester.pumpAndSettle();
+
+    expect(container.read(themeModeProvider), ThemeMode.light);
+    expect(
+      container.read(readerSettingsProvider).pageTone,
+      ReaderPageTone.sepia,
+    );
+  });
+
+  testWidgets('reader settings switch the typeface', (tester) async {
+    final container = await pumpReader(
+      tester,
+      repository: FakeReaderRepository(),
+    );
+    expect(
+      container.read(readerSettingsProvider).typeface,
+      ReaderTypeface.serif,
+    );
+
+    await tester.tap(find.byTooltip('Reader settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sans'));
+    await tester.pumpAndSettle();
+
+    expect(
+      container.read(readerSettingsProvider).typeface,
+      ReaderTypeface.sans,
+    );
   });
 
   testWidgets('bookmarking a position lists the new bookmark', (tester) async {

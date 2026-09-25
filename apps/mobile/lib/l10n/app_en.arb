@@ -24,7 +24,7 @@
   "@signOut": {
     "description": "Tooltip/label for the sign-out action."
   },
-  "libraryTitle": "My Library",
+  "libraryTitle": "Library",
   "@libraryTitle": {
     "description": "Title of the library screen."
   },
@@ -99,7 +99,7 @@
   "@fieldPages": {
     "description": "Label for the page count field."
   },
-  "readBook": "Read",
+  "readBook": "Start reading",
   "@readBook": {
     "description": "Label for the action that opens the reader."
   },

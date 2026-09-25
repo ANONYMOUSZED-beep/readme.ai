@@ -40,3 +40,16 @@ flutter:
   uses-material-design: true
   # Generate localization delegates from the ARB files in lib/l10n.
   generate: true
+  # Literata — a serif designed for long-form screen reading (SIL OFL 1.1,
+  # see assets/fonts/literata/OFL.txt). Bundled so headings and book text
+  # render identically on every platform, including web.
+  fonts:
+    - family: Literata
+      fonts:
+        - asset: assets/fonts/literata/Literata-Regular.ttf
+        - asset: assets/fonts/literata/Literata-Italic.ttf
+          style: italic
+        - asset: assets/fonts/literata/Literata-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/literata/Literata-Bold.ttf
+          weight: 700

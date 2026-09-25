@@ -68,6 +68,8 @@ void main() {
     await _pumpDevApp(tester);
     expect(find.byType(LibraryScreen), findsOneWidget);
 
+    await tester.tap(find.byTooltip('Account'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.logout));
     await tester.pumpAndSettle();
 
